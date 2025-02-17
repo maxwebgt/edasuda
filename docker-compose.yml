@@ -1,0 +1,38 @@
+version: '3'
+services:
+  mongo:
+    image: mongo:latest
+    container_name: mongo_db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  mongo-express:
+    image: mongo-express:latest
+    container_name: mongo_express
+    environment:
+      ME_CONFIG_MONGODB_SERVER: mongo
+      ME_CONFIG_MONGODB_ADMINUSERNAME: root
+      ME_CONFIG_MONGODB_ADMINPASSWORD: example
+    ports:
+      - "8081:8081"
+    depends_on:
+      - mongo
+
+  api:
+    build: ./backend  # Путь к папке с бэкендом
+    container_name: api_app
+    environment:
+      - MONGO_URI=mongodb://root:example@mongo:27017  # Используем контейнер MongoDB
+    ports:
+      - "5000:5000"
+    depends_on:
+      - mongo
+
+volumes:
+  mongo_data:
+    driver: local

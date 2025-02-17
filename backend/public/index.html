@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Documentation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f4f4;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        a {
+            color: #007bff;
+            text-decoration: none;
+            font-size: 18px;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        li {
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<h1>Welcome to the API</h1>
+<p>Here are the available endpoints:</p>
+<ul>
+    <li><a href="/api/products">GET /api/products</a> - Get all products</li>
+    <li><a href="/api/products">POST /api/products</a> - Add a product (for chefs)</li>
+    <li><a href="/api/orders">POST /api/orders</a> - Create a new order (for clients)</li>
+    <li><a href="/api/orders">GET /api/orders</a> - Get all orders</li>
+    <li><a href="/api/users">POST /api/users</a> - Create a new user</li> <!-- Добавлена ссылка на новый эндпоинт -->
+    <li><a href="/api/users/{id}">GET /api/users/{id}</a> - Get a user by ID</li> <!-- Добавлена ссылка на новый эндпоинт -->
+</ul>
+
+<h2>API Documentation</h2>
+<p>For detailed API documentation, visit the <a href="/api-docs" target="_blank">Swagger UI</a></p>
+
+<h2>Mongo Express</h2>
+<p>You can manage your MongoDB data with Mongo Express. Visit <a href="http://localhost:8081" target="_blank">Mongo Express</a></p>
+
+</body>
+</html>
