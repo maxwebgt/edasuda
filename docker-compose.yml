@@ -9,7 +9,7 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/data/db
+      - ./mongo_data:/data/db
 
   mongo-express:
     image: mongo-express:latest
@@ -32,6 +32,21 @@ services:
       - "5000:5000"
     depends_on:
       - mongo
+
+  tg_bot:
+    build:
+      context: ./tg_bot  # Путь к папке с ботом
+      dockerfile: Dockerfile
+    container_name: tg_bot_app
+    environment:
+      - TELEGRAM_BOT_TOKEN=7637457882:AAHbeS-f8bNRdN0GKSLwjM1K2NBXFjBpc9g  # Токен для бота, задаем переменную в .env
+    ports:
+      - "5001:5001"  # Если бот работает на порту 5001
+    volumes:
+      - ./tg_bot:/app
+    depends_on:
+      - mongo
+      - api  # Можно добавить зависимости от API или базы данных, если бот работает с ними
 
 volumes:
   mongo_data:
