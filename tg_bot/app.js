@@ -1,80 +1,102 @@
-// Загружаем переменные окружения из .env файла
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
+const axios = require('axios');
 const express = require('express');
 const app = express();
-const axios = require('axios');
 
 // Берем токен из переменной окружения
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
-// Проверка на наличие токена в переменных окружения
 if (!token) {
     console.error('Telegram bot token is missing in the environment variables.');
     process.exit(1);
 }
 
-// Создание бота
 const bot = new TelegramBot(token, { polling: true });
 
-// Приветственное сообщение с доступными командами
-const welcomeMessage = `
-Добро пожаловать в наш магазин!
-`;
+// Состояние пользователя (для выбора продукта и количества)
+const userState = {};
 
-// Инлайн клавиатура для главного меню
 const mainMenu = {
     reply_markup: JSON.stringify({
         inline_keyboard: [
-            [
-                { text: 'Сосиски', callback_data: 'order' },
-                { text: 'Рыба', callback_data: 'products' },
-            ],
-            [
-                { text: 'Ветчина', callback_data: 'status' },
-                { text: 'Хлеб', callback_data: 'help' },
-            ]
+            [{ text: '🛒Просмотреть продукты', callback_data: 'view_products' }],
+            [{ text: 'Помощь', callback_data: 'help' }]
         ]
     })
 };
-const replyMenu = {
-    reply_markup: JSON.stringify({
-        keyboard: [
-            ['🛒Каталог', 'Заказы'],
-            ['Помощь']
-        ],
-        resize_keyboard: true, // Автоматически подстраивает размер клавиатуры
-        one_time_keyboard: true // Клавиатура исчезнет после нажатия
-    })
-};
 
-
+// Команда /start (приветствие нового пользователя)
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
-    // bot.sendMessage(chatId, welcomeMessage);
-    // bot.sendMessage(chatId, 'Добро пожаловать в наш магазин!', mainMenu);
-    bot.sendMessage(chatId, welcomeMessage, replyMenu);
+    bot.sendMessage(chatId, 'Добро пожаловать в наш магазин! Вот что у нас сейчас есть вкусненького:', mainMenu);
 });
 
-// Обработка нажатия кнопок Reply клавиатуры
-bot.on('message', async (msg) => {
-    const chatId = msg.chat.id;
-    const text = msg.text;
+// Обработка нажатий на Inline кнопки
+bot.on('callback_query', async (callbackQuery) => {
+    const chatId = callbackQuery.message.chat.id;
+    const data = callbackQuery.data;
 
-    if (text === '🛒Каталог') {
+    if (data === 'view_products') {
         try {
             const response = await axios.get('http://api:5000/api/products'); // Примерный URL твоего API
             const products = response.data;
-            let productList = 'Вот список доступных продуктов:\n';
 
+            let productList = 'Вот список доступных продуктов:\n';
             products.forEach(product => {
                 productList += `${product.id}. ${product.name}\n`;
             });
 
-            bot.sendMessage(chatId, productList);
+            userState[chatId] = { step: 'select_product', products };
+            bot.sendMessage(chatId, productList + 'Выберите продукт, отправив его номер (например, "1" для Сосисок).');
         } catch (error) {
-            console.error(error);
+            console.error('Error fetching products:', error);
             bot.sendMessage(chatId, 'Произошла ошибка при получении списка продуктов.');
+        }
+    } else if (data === 'help') {
+        bot.sendMessage(chatId, 'Вот что можно сделать:\n1. Просмотреть продукты /view_products\n2. Оформить заказ');
+    }
+});
+
+// Обработка выбора продукта и запроса количества
+bot.on('message', async (msg) => {
+    const chatId = msg.chat.id;
+    const text = msg.text;
+
+    if (userState[chatId] && userState[chatId].step === 'select_product') {
+        // Проверяем, что введен номер продукта
+        const selectedProduct = userState[chatId].products.find(p => p.id === parseInt(text));
+
+        if (selectedProduct) {
+            userState[chatId].selectedProduct = selectedProduct;
+            userState[chatId].step = 'select_quantity';
+
+            bot.sendMessage(chatId, `Вы выбрали ${selectedProduct.name}. Теперь укажите количество (например, 2).`);
+        } else {
+            bot.sendMessage(chatId, 'Неверный выбор продукта. Пожалуйста, отправьте номер продукта из списка.');
+        }
+    } else if (userState[chatId] && userState[chatId].step === 'select_quantity') {
+        const quantity = parseInt(text);
+
+        if (isNaN(quantity) || quantity <= 0) {
+            bot.sendMessage(chatId, 'Введите корректное количество.');
+        } else {
+            const order = {
+                productId: userState[chatId].selectedProduct.id,
+                quantity,
+                userId: chatId
+            };
+
+            try {
+                const response = await axios.post('http://localhost:5000/api/orders', order); // Примерный URL для создания заказа
+                bot.sendMessage(chatId, `Ваш заказ принят! Продукт: ${userState[chatId].selectedProduct.name}, Количество: ${quantity}`);
+            } catch (error) {
+                console.error('Error creating order:', error);
+                bot.sendMessage(chatId, 'Произошла ошибка при создании заказа.');
+            }
+
+            // Очистить состояние после завершения заказа
+            delete userState[chatId];
         }
     } else {
         bot.sendMessage(chatId, 'Привет! Введите команду /start для начала.');
