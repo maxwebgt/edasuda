@@ -14,13 +14,15 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: true });
 
-// Состояние пользователя (для выбора продукта и количества)
+// Состояние пользователя (для выбора действия)
 const userState = {};
 
+// Главное меню
 const mainMenu = {
     reply_markup: JSON.stringify({
         inline_keyboard: [
             [{ text: '🛒Просмотреть продукты', callback_data: 'view_products' }],
+            [{ text: 'Добавить продукт', callback_data: 'add_product' }],
             [{ text: 'Помощь', callback_data: 'help' }]
         ]
     })
@@ -53,51 +55,54 @@ bot.on('callback_query', async (callbackQuery) => {
             console.error('Error fetching products:', error);
             bot.sendMessage(chatId, 'Произошла ошибка при получении списка продуктов.');
         }
+    } else if (data === 'add_product') {
+        userState[chatId] = { step: 'add_product_name' };
+        bot.sendMessage(chatId, 'Введите название продукта:');
     } else if (data === 'help') {
-        bot.sendMessage(chatId, 'Вот что можно сделать:\n1. Просмотреть продукты /view_products\n2. Оформить заказ');
+        bot.sendMessage(chatId, 'Вот что можно сделать:\n1. Просмотреть продукты /view_products\n2. Оформить заказ\n3. Добавить продукт /add_product');
     }
 });
 
-// Обработка выбора продукта и запроса количества
+// Обработка ввода сообщения от пользователя (для добавления нового продукта)
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    if (userState[chatId] && userState[chatId].step === 'select_product') {
-        // Проверяем, что введен номер продукта
-        const selectedProduct = userState[chatId].products.find(p => p.id === parseInt(text));
-
-        if (selectedProduct) {
-            userState[chatId].selectedProduct = selectedProduct;
-            userState[chatId].step = 'select_quantity';
-
-            bot.sendMessage(chatId, `Вы выбрали ${selectedProduct.name}. Теперь укажите количество (например, 2).`);
+    if (userState[chatId] && userState[chatId].step === 'add_product_name') {
+        userState[chatId].productName = text;
+        userState[chatId].step = 'add_product_description';
+        bot.sendMessage(chatId, 'Введите описание продукта:');
+    } else if (userState[chatId] && userState[chatId].step === 'add_product_description') {
+        userState[chatId].productDescription = text;
+        userState[chatId].step = 'add_product_price';
+        bot.sendMessage(chatId, 'Введите цену продукта:');
+    } else if (userState[chatId] && userState[chatId].step === 'add_product_price') {
+        const price = parseFloat(text);
+        if (isNaN(price) || price <= 0) {
+            bot.sendMessage(chatId, 'Введите корректную цену продукта.');
         } else {
-            bot.sendMessage(chatId, 'Неверный выбор продукта. Пожалуйста, отправьте номер продукта из списка.');
+            userState[chatId].productPrice = price;
+            userState[chatId].step = 'add_product_category';
+            bot.sendMessage(chatId, 'Введите категорию продукта:');
         }
-    } else if (userState[chatId] && userState[chatId].step === 'select_quantity') {
-        const quantity = parseInt(text);
+    } else if (userState[chatId] && userState[chatId].step === 'add_product_category') {
+        userState[chatId].productCategory = text;
+        const newProduct = {
+            name: userState[chatId].productName,
+            description: userState[chatId].productDescription,
+            price: userState[chatId].productPrice,
+            category: userState[chatId].productCategory
+        };
 
-        if (isNaN(quantity) || quantity <= 0) {
-            bot.sendMessage(chatId, 'Введите корректное количество.');
-        } else {
-            const order = {
-                productId: userState[chatId].selectedProduct.id,
-                quantity,
-                userId: chatId
-            };
-
-            try {
-                const response = await axios.post('http://localhost:5000/api/orders', order); // Примерный URL для создания заказа
-                bot.sendMessage(chatId, `Ваш заказ принят! Продукт: ${userState[chatId].selectedProduct.name}, Количество: ${quantity}`);
-            } catch (error) {
-                console.error('Error creating order:', error);
-                bot.sendMessage(chatId, 'Произошла ошибка при создании заказа.');
-            }
-
-            // Очистить состояние после завершения заказа
-            delete userState[chatId];
+        try {
+            const response = await axios.post('http://api:5000/api/products', newProduct); // Примерный URL API для добавления продукта
+            bot.sendMessage(chatId, `Продукт "${newProduct.name}" успешно добавлен!`);
+        } catch (error) {
+            console.error('Error adding product:', error);
+            bot.sendMessage(chatId, 'Произошла ошибка при добавлении продукта.');
         }
+
+        delete userState[chatId];  // Очистить состояние после добавления продукта
     } else {
         bot.sendMessage(chatId, 'Привет! Введите команду /start для начала.');
     }

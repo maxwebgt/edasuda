@@ -48,7 +48,7 @@ const productSchema = new mongoose.Schema({
     },
     externalId: {
         type: String,
-        unique: true,  // Для внешних интеграций
+        // unique: true,  // Для внешних интеграций
         default: '',  // Оставляем пустым, если не используется
     },
     chefId: {
