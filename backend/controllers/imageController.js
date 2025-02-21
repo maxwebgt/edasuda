@@ -1,3 +1,5 @@
+const path = require('path');
+const fs = require('fs');
 const Image = require('../models/imageModel');
 
 exports.uploadImage = async (req, res) => {
@@ -8,7 +10,7 @@ exports.uploadImage = async (req, res) => {
 
     const { title, description, tags } = req.body;
     const filename = req.file.originalname || 'unnamed-file';
-    
+
     const newImage = new Image({
       filename,
       title: title || filename,
@@ -73,6 +75,26 @@ exports.getImageFileById = async (req, res) => {
   }
 };
 
+exports.getImageFileByFilename = async (req, res) => {
+  try {
+    const filename = req.params.filename;
+    const image = await Image.findOne({ filename });
+    if (!image) {
+      return res.status(404).json({ message: 'Image not found' });
+    }
+
+    const imageBuffer = Buffer.from(image.imageBase64, 'base64');
+    res.set({
+      'Content-Type': image.contentType,
+      'Content-Disposition': `inline; filename="${image.filename}"`,
+      'Content-Length': imageBuffer.length
+    });
+    res.send(imageBuffer);
+  } catch (error) {
+    res.status(500).json({ message: 'Error retrieving image', error: error.message });
+  }
+};
+
 exports.searchImages = async (req, res) => {
   try {
     const {
@@ -101,10 +123,10 @@ exports.searchImages = async (req, res) => {
 
     const [images, total] = await Promise.all([
       Image.find(filter)
-        .select('-imageBase64')
-        .sort(sort)
-        .skip(skip)
-        .limit(parseInt(limit)),
+          .select('-imageBase64')
+          .sort(sort)
+          .skip(skip)
+          .limit(parseInt(limit)),
       Image.countDocuments(filter)
     ]);
 
@@ -124,7 +146,7 @@ exports.updateImage = async (req, res) => {
   try {
     const imageId = req.params.id;
     const { title, description, tags } = req.body;
-    
+
     const image = await Image.findById(imageId);
     if (!image) {
       return res.status(404).json({ message: 'Image not found' });
@@ -148,9 +170,9 @@ exports.updateImage = async (req, res) => {
     }
 
     const updatedImage = await Image.findByIdAndUpdate(
-      imageId,
-      updateData,
-      { new: true, runValidators: true }
+        imageId,
+        updateData,
+        { new: true, runValidators: true }
     );
 
     res.status(200).json({
@@ -207,10 +229,10 @@ exports.getAllImages = async (req, res) => {
 
     const [images, total] = await Promise.all([
       Image.find()
-        .select('-imageBase64')
-        .sort(sort)
-        .skip(skip)
-        .limit(parseInt(limit)),
+          .select('-imageBase64')
+          .sort(sort)
+          .skip(skip)
+          .limit(parseInt(limit)),
       Image.countDocuments()
     ]);
 
@@ -223,8 +245,8 @@ exports.getAllImages = async (req, res) => {
       timestamp: new Date('2025-02-21T11:27:53Z')
     });
   } catch (error) {
-    res.status(500).json({ 
-      message: 'Error retrieving images', 
+    res.status(500).json({
+      message: 'Error retrieving images',
       error: error.message,
       timestamp: new Date('2025-02-21T11:27:53Z')
     });

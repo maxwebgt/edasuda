@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const imageController = require('../controllers/imageController');
+const path = require('path');
 
 const router = express.Router();
 
@@ -300,5 +301,8 @@ router.get('/:id', imageController.getImageById);
 router.get('/:id/file', imageController.getImageFileById);
 router.put('/:id', upload.single('image'), imageController.updateImage);
 router.delete('/:id', imageController.deleteImage);
+
+// Новый маршрут для получения изображения по имени файла
+router.get('/file/:filename', imageController.getImageFileByFilename);
 
 module.exports = router;
