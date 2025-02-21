@@ -1,14 +1,29 @@
 const express = require('express');
-const Order = require('../models/orderModel');
-const User = require('../models/userModel');
-const Product = require('../models/productModel');
 const router = express.Router();
+const orderController = require('../controllers/orderController');
 
+// Получение всех заказов
+/**
+ * @swagger
+ * /api/orders:
+ *   get:
+ *     summary: Получение всех заказов
+ *     tags: [Orders]
+ *     responses:
+ *       200:
+ *         description: Список всех заказов
+ *       500:
+ *         description: Ошибка при получении заказов
+ */
+router.get('/', orderController.getAllOrders);
+
+// Создание нового заказа
 /**
  * @swagger
  * /api/orders:
  *   post:
- *     summary: Create a new order
+ *     summary: Создание нового заказа
+ *     tags: [Orders]
  *     requestBody:
  *       required: true
  *       content:
@@ -27,77 +42,117 @@ const router = express.Router();
  *                       type: string
  *                     quantity:
  *                       type: number
+ *               status:
+ *                 type: string
+ *                 default: 'В процессе'
+ *               totalAmount:
+ *                 type: number
+ *               paymentStatus:
+ *                 type: string
+ *                 enum: ['Оплачено', 'Не оплачено', 'В процессе']
+ *                 default: 'Не оплачено'
+ *               paymentMethod:
+ *                 type: string
+ *                 enum: ['Наличные', 'Карта', 'Онлайн']
+ *                 default: 'Наличные'
+ *               shippingAddress:
+ *                 type: string
+ *               contactEmail:
+ *                 type: string
+ *               contactPhone:
+ *                 type: string
  *     responses:
  *       201:
- *         description: Order created successfully
+ *         description: Заказ успешно создан
+ *       400:
+ *         description: Неверный статус оплаты или метод оплаты
+ *       500:
+ *         description: Ошибка при создании заказа
  */
-router.post('/', async (req, res) => {
-    const { clientId, products } = req.body; // Продукты и клиент
+router.post('/', orderController.createOrder);
 
-    try {
-        const client = await User.findById(clientId);
-        if (!client || client.role !== 'client') {
-            return res.status(400).json({ message: 'Client not found or invalid role' });
-        }
-
-        // Проверяем, что все продукты существуют и их можно заказать
-        const productIds = products.map((item) => item.productId);
-        const foundProducts = await Product.find({ _id: { $in: productIds } });
-        if (foundProducts.length !== products.length) {
-            return res.status(400).json({ message: 'One or more products not found' });
-        }
-
-        // Создаем заказ
-        const newOrder = new Order({
-            clientId,
-            products,
-        });
-
-        await newOrder.save();
-        res.status(201).json(newOrder);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
+// Получение заказа по ID
 /**
  * @swagger
- * /api/orders:
+ * /api/orders/{id}:
  *   get:
- *     summary: Get all orders
+ *     summary: Получение заказа по ID
+ *     tags: [Orders]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID заказа
  *     responses:
  *       200:
- *         description: A list of orders
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 type: object
- *                 properties:
- *                   clientId:
- *                     type: string
- *                   products:
- *                     type: array
- *                     items:
- *                       type: object
- *                       properties:
- *                         productId:
- *                           type: string
- *                         quantity:
- *                           type: number
- *                   status:
- *                     type: string
- *                   createdAt:
- *                     type: string
+ *         description: Заказ найден
+ *       404:
+ *         description: Заказ не найден
+ *       500:
+ *         description: Ошибка при получении заказа
  */
-router.get('/', async (req, res) => {
-    try {
-        const orders = await Order.find().populate('clientId').populate('products.productId');
-        res.status(200).json(orders);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
+router.get('/:id', orderController.getOrderById);
+
+// Обновление заказа
+/**
+ * @swagger
+ * /api/orders/{id}:
+ *   put:
+ *     summary: Обновление информации о заказе
+ *     tags: [Orders]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID заказа
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               clientId:
+ *                 type: string
+ *               products:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     productId:
+ *                       type: string
+ *                     quantity:
+ *                       type: number
+ *               status:
+ *                 type: string
+ *               totalAmount:
+ *                 type: number
+ *               paymentStatus:
+ *                 type: string
+ *                 enum: ['Оплачено', 'Не оплачено', 'В процессе']
+ *               paymentMethod:
+ *                 type: string
+ *                 enum: ['Наличные', 'Карта', 'Онлайн']
+ *               shippingAddress:
+ *                 type: string
+ *               contactEmail:
+ *                 type: string
+ *               contactPhone:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Заказ успешно обновлен
+ *       400:
+ *         description: Неверный статус оплаты или метод оплаты
+ *       404:
+ *         description: Заказ не найден
+ *       500:
+ *         description: Ошибка при обновлении заказа
+ */
+router.put('/:id', orderController.updateOrder);
 
 module.exports = router;

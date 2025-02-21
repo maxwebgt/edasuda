@@ -1,20 +1,23 @@
 # Используем официальный образ Node.js
 FROM node:16
 
-# Устанавливаем рабочую директорию
+# Создаем рабочую директорию
 WORKDIR /app
 
-# Копируем package.json и package-lock.json (если есть)
-COPY package*.json ./
+# Копируем package.json и package-lock.json в контейнер
+#COPY package*.json ./
 
 # Устанавливаем зависимости
-RUN npm install
 
-# Копируем все файлы приложения в контейнер
+
+# Устанавливаем nodemon глобально
+RUN npm install -g nodemon
+#RUN npm install
+# Копируем весь код в контейнер
 COPY . .
 
-# Открываем порт для приложения
+# Открываем порт 5000 для доступа
 EXPOSE 5000
 
-# Запускаем приложение
-CMD ["node", "server.js"]
+# Запуск через nodemon для разработки
+CMD ["nodemon", "server.js"]

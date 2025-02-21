@@ -29,7 +29,7 @@ const swaggerOptions = {
             },
         ],
     },
-    apis: ['./routes/*.js', './controllers/*.js'],  // Включаем файлы с аннотациями для Swagger
+    apis: ['./routes/*.js', './controllers/*.js', './routes/userRoutes.js'],  // Включаем файлы с аннотациями для Swagger
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);

@@ -1,12 +1,29 @@
 const express = require('express');
-const User = require('../models/userModel');  // Подключаем модель пользователя
 const router = express.Router();
+const userController = require('../controllers/userController');
 
+// Получение всех пользователей
+/**
+ * @swagger
+ * /api/users:
+ *   get:
+ *     summary: Получение всех пользователей
+ *     tags: [Users]
+ *     responses:
+ *       200:
+ *         description: Список всех пользователей
+ *       500:
+ *         description: Ошибка при получении пользователей
+ */
+router.get('/', userController.getAllUsers);
+
+// Создание нового пользователя
 /**
  * @swagger
  * /api/users:
  *   post:
- *     summary: Create a new user
+ *     summary: Создание нового пользователя
+ *     tags: [Users]
  *     requestBody:
  *       required: true
  *       content:
@@ -16,50 +33,39 @@ const router = express.Router();
  *             properties:
  *               name:
  *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
  *               role:
  *                 type: string
- *                 enum: [chef, client]  # Роли: повар или клиент
+ *               telegramId:
+ *                 type: string
  *     responses:
  *       201:
- *         description: User created successfully
- *       400:
- *         description: Invalid role
+ *         description: Пользователь успешно создан
+ *       500:
+ *         description: Ошибка при создании пользователя
  */
-router.post('/', async (req, res) => {
-    const { name, role } = req.body;
+router.post('/', userController.createUser);
 
-    try {
-        if (!['chef', 'client'].includes(role)) {
-            return res.status(400).json({ message: 'Invalid role. Must be either chef or client.' });
-        }
-
-        const newUser = new User({
-            name,
-            role,
-        });
-
-        await newUser.save();
-        res.status(201).json(newUser);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
-
+// Получение пользователя по ID
 /**
  * @swagger
  * /api/users/{id}:
  *   get:
- *     summary: Get a user by ID
+ *     summary: Получение пользователя по ID
+ *     tags: [Users]
  *     parameters:
- *       - name: id
- *         in: path
+ *       - in: path
+ *         name: id
  *         required: true
- *         description: The user ID
  *         schema:
  *           type: string
+ *         description: ID пользователя
  *     responses:
  *       200:
- *         description: User details
+ *         description: Пользователь найден
  *         content:
  *           application/json:
  *             schema:
@@ -67,24 +73,58 @@ router.post('/', async (req, res) => {
  *               properties:
  *                 name:
  *                   type: string
+ *                 email:
+ *                   type: string
  *                 role:
  *                   type: string
- *                   enum: [chef, client]
+ *                 telegramId:
+ *                   type: string
  *       404:
- *         description: User not found
+ *         description: Пользователь не найден
+ *       500:
+ *         description: Ошибка при получении пользователя
  */
-router.get('/:id', async (req, res) => {
-    const { id } = req.params;
+router.get('/:id', userController.getUserById);
 
-    try {
-        const user = await User.findById(id);
-        if (!user) {
-            return res.status(404).json({ message: 'User not found' });
-        }
-        res.status(200).json(user);
-    } catch (error) {
-        res.status(500).json({ message: error.message });
-    }
-});
+// Обновление пользователя
+/**
+ * @swagger
+ * /api/users/{id}:
+ *   put:
+ *     summary: Обновление информации о пользователе
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID пользователя
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *               telegramId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Пользователь успешно обновлен
+ *       404:
+ *         description: Пользователь не найден
+ *       500:
+ *         description: Ошибка при обновлении пользователя
+ */
+router.put('/:id', userController.updateUser);
 
 module.exports = router;

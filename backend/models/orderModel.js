@@ -22,6 +22,47 @@ const orderSchema = new mongoose.Schema({
         type: String,
         default: 'В процессе',
     },
+    totalAmount: {
+        type: Number,
+        required: true,
+        default: 0, // Общая стоимость заказа, рассчитывается при создании заказа
+    },
+    paymentStatus: {
+        type: String,
+        enum: ['Оплачено', 'Не оплачено', 'В процессе'],
+        default: 'Не оплачено',
+    },
+    paymentMethod: {
+        type: String,
+        enum: ['Наличные', 'Карта', 'Онлайн'],
+        default: 'Наличные',
+    },
+    shippingAddress: {
+        type: String,
+        required: true,
+    },
+    contactEmail: {
+        type: String,
+        required: true,
+    },
+    contactPhone: {
+        type: String,
+        required: true,
+    },
+    createdAt: {
+        type: Date,
+        default: Date.now, // Дата создания заказа
+    },
+    updatedAt: {
+        type: Date,
+        default: Date.now, // Дата последнего обновления заказа
+    },
+});
+
+// Автоматически обновляем updatedAt при каждом изменении
+orderSchema.pre('save', function(next) {
+    this.updatedAt = Date.now();
+    next();
 });
 
 module.exports = mongoose.model('Order', orderSchema);
