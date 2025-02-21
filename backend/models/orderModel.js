@@ -5,6 +5,10 @@ const orderSchema = new mongoose.Schema({
         type: String,
         required: true,
     },
+    description: {  // Добавлено новое поле
+        type: String,
+        default: '', // Пустая строка по умолчанию
+    },
     products: [
         {
             productId: {

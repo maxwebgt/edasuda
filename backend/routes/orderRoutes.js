@@ -33,6 +33,9 @@ router.get('/', orderController.getAllOrders);
  *             properties:
  *               clientId:
  *                 type: string
+ *               description:
+ *                 type: string
+ *                 description: Описание заказа
  *               products:
  *                 type: array
  *                 items:
@@ -118,6 +121,9 @@ router.get('/:id', orderController.getOrderById);
  *             properties:
  *               clientId:
  *                 type: string
+ *               description:
+ *                 type: string
+ *                 description: Описание заказа
  *               products:
  *                 type: array
  *                 items:

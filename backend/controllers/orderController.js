@@ -14,7 +14,18 @@ exports.getAllOrders = async (req, res) => {
 
 // Создание нового заказа
 exports.createOrder = async (req, res) => {
-  const { clientId, products, status, totalAmount, paymentStatus, paymentMethod, shippingAddress, contactEmail, contactPhone } = req.body;
+  const {
+    clientId,
+    products,
+    status,
+    totalAmount,
+    paymentStatus,
+    paymentMethod,
+    shippingAddress,
+    contactEmail,
+    contactPhone,
+    description // Добавлено новое поле
+  } = req.body;
 
   // Проверка на корректность значений paymentStatus и paymentMethod
   const validPaymentStatuses = ['Оплачено', 'Не оплачено', 'В процессе'];
@@ -33,13 +44,11 @@ exports.createOrder = async (req, res) => {
     return res.status(400).json({ message: 'Необходимо передать продукты' });
   }
 
-
   const productsWithObjectId = products.map(product => {
     // Проверка и преобразование productId в ObjectId
     if (!mongoose.Types.ObjectId.isValid(product.productId)) {
       return res.status(400).json({ message: `Неверный ID продукта: ${product.productId}` });
     }
-    // product.productId = new mongoose.Types.ObjectId(product.productId);  // Используем 'new' для создания нового ObjectId
     const { ObjectId } = mongoose.Types;
     console.log('Product ID:', product.productId);
     console.log('Is valid ObjectId:', mongoose.Types.ObjectId.isValid(product.productId));
@@ -64,6 +73,7 @@ exports.createOrder = async (req, res) => {
       shippingAddress,
       contactEmail,
       contactPhone,
+      description: description || '' // Добавлено новое поле с значением по умолчанию
     });
 
     await newOrder.save();
@@ -95,7 +105,18 @@ exports.getOrderById = async (req, res) => {
 // Обновление заказа
 exports.updateOrder = async (req, res) => {
   const { id } = req.params;
-  const { clientId, products, status, totalAmount, paymentStatus, paymentMethod, shippingAddress, contactEmail, contactPhone } = req.body;
+  const {
+    clientId,
+    products,
+    status,
+    totalAmount,
+    paymentStatus,
+    paymentMethod,
+    shippingAddress,
+    contactEmail,
+    contactPhone,
+    description // Добавлено новое поле
+  } = req.body;
 
   // Проверка на корректность значений paymentStatus и paymentMethod
   const validPaymentStatuses = ['Оплачено', 'Не оплачено', 'В процессе'];
@@ -134,6 +155,7 @@ exports.updateOrder = async (req, res) => {
     order.shippingAddress = shippingAddress || order.shippingAddress;
     order.contactEmail = contactEmail || order.contactEmail;
     order.contactPhone = contactPhone || order.contactPhone;
+    order.description = description !== undefined ? description : order.description; // Добавлено обновление description
 
     await order.save();
     res.json(order);

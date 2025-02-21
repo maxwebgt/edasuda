@@ -64,29 +64,31 @@ bot.on('callback_query', async (callbackQuery) => {
         const selectedProduct = userState[chatId].products[index];
         const productInfo = `Вы выбрали продукт: ${selectedProduct.name}\nОписание: ${selectedProduct.description}\nЦена: ${selectedProduct.price} ₽`;
 
+        // Сохраняем выбранный продукт в состоянии пользователя
+        userState[chatId] = {
+            step: 'enter_quantity',
+            selectedProduct: selectedProduct
+        };
+
         console.log('Selected product data:', selectedProduct);
 
+        // Отправляем фото продукта и запрашиваем количество
         if (selectedProduct.filename || selectedProduct.image) {
             try {
                 const filename = selectedProduct.filename || selectedProduct.image;
-                // Получаем изображение с нашего API
                 const imageResponse = await axios.get(`http://api:5000/api/images/file/${filename}`, {
                     responseType: 'arraybuffer'
                 });
 
-                console.log('Image response received, content length:', imageResponse.data.length);
-
-                // Отправляем изображение в Telegram напрямую
                 await bot.sendPhoto(chatId, Buffer.from(imageResponse.data), {
-                    caption: productInfo
+                    caption: productInfo + '\n\nПожалуйста, введите желаемое количество:'
                 });
             } catch (error) {
                 console.error('Error sending photo:', error);
-                console.error('Error details:', error.response?.data);
-                bot.sendMessage(chatId, productInfo);
+                bot.sendMessage(chatId, productInfo + '\n\nПожалуйста, введите желаемое количество:');
             }
         } else {
-            bot.sendMessage(chatId, productInfo);
+            bot.sendMessage(chatId, productInfo + '\n\nПожалуйста, введите желаемое количество:');
         }
     } else if (data === 'add_product') {
         userState[chatId] = { step: 'add_product_name' };
@@ -96,20 +98,26 @@ bot.on('callback_query', async (callbackQuery) => {
     }
 });
 
-// Обработка ввода сообщения от пользователя (для добавления нового продукта)
+// Обработка ввода сообщения от пользователя
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    if (userState[chatId] && userState[chatId].step === 'add_product_name') {
+    if (!userState[chatId]) {
+        return;
+    }
+
+    if (userState[chatId].step === 'add_product_name') {
         userState[chatId].productName = text;
         userState[chatId].step = 'add_product_description';
         bot.sendMessage(chatId, 'Введите описание продукта:');
-    } else if (userState[chatId] && userState[chatId].step === 'add_product_description') {
+    }
+    else if (userState[chatId].step === 'add_product_description') {
         userState[chatId].productDescription = text;
         userState[chatId].step = 'add_product_price';
         bot.sendMessage(chatId, 'Введите цену продукта:');
-    } else if (userState[chatId] && userState[chatId].step === 'add_product_price') {
+    }
+    else if (userState[chatId].step === 'add_product_price') {
         const price = parseFloat(text);
         if (isNaN(price) || price <= 0) {
             bot.sendMessage(chatId, 'Введите корректную цену продукта.');
@@ -118,12 +126,14 @@ bot.on('message', async (msg) => {
             userState[chatId].step = 'add_product_category';
             bot.sendMessage(chatId, 'Введите категорию продукта:');
         }
-    } else if (userState[chatId] && userState[chatId].step === 'add_product_category') {
+    }
+    else if (userState[chatId].step === 'add_product_category') {
         userState[chatId].productCategory = text;
         userState[chatId].step = 'add_product_image';
         bot.sendMessage(chatId, 'Пожалуйста, отправьте изображение продукта:');
-    } else if (userState[chatId] && userState[chatId].step === 'add_product_image' && msg.photo) {
-        const photo = msg.photo[msg.photo.length - 1]; // Берем фото с максимальным разрешением
+    }
+    else if (userState[chatId].step === 'add_product_image' && msg.photo) {
+        const photo = msg.photo[msg.photo.length - 1];
         const fileId = photo.file_id;
 
         try {
@@ -156,35 +166,89 @@ bot.on('message', async (msg) => {
                 description: userState[chatId].productDescription,
                 price: userState[chatId].productPrice,
                 category: userState[chatId].productCategory,
-                image: imageResponse.data.image.filename,
-                filename: imageResponse.data.image.filename
+                image: imageResponse.data.image.filename
             };
 
             console.log('New product data before sending:', newProduct);
 
-            try {
-                const productResponse = await axios.post('http://api:5000/api/products', newProduct);
-                console.log('Product creation response data:', productResponse.data);
+            const productResponse = await axios.post('http://api:5000/api/products', newProduct);
+            console.log('Product creation response data:', productResponse.data);
 
-                // Проверим структуру созданного продукта
-                const createdProduct = await axios.get(`http://api:5000/api/products/${productResponse.data._id}`);
-                console.log('Created product data:', createdProduct.data);
+            bot.sendMessage(chatId, `Продукт "${newProduct.name}" успешно добавлен!`);
+            bot.sendMessage(chatId, 'Добро пожаловать в наш магазин! Вот что у нас сейчас есть вкусненького:', mainMenu);
 
-                bot.sendMessage(chatId, `Продукт "${newProduct.name}" успешно добавлен!`);
-
-                // Возвращаем стартовое сообщение
-                bot.sendMessage(chatId, 'Добро пожаловать в наш магазин! Вот что у нас сейчас есть вкусненького:', mainMenu);
-            } catch (error) {
-                console.error('Error adding product:', error);
-                console.error('Error response data:', error.response?.data);
-                bot.sendMessage(chatId, 'Произошла ошибка при добавлении продукта.');
-            }
-
-            delete userState[chatId];  // Очистить состояние после добавления продукта
+            delete userState[chatId];
         } catch (error) {
-            console.error('Error downloading or uploading image:', error);
-            console.error('Error response data:', error.response?.data);
-            bot.sendMessage(chatId, 'Произошла ошибка при обработке изображения.');
+            console.error('Error creating product:', error);
+            bot.sendMessage(chatId, 'Произошла ошибка при создании продукта.');
+        }
+    }
+    else if (userState[chatId].step === 'enter_quantity') {
+        const quantity = parseInt(text);
+        if (isNaN(quantity) || quantity <= 0) {
+            bot.sendMessage(chatId, 'Пожалуйста, введите корректное количество (положительное число).');
+            return;
+        }
+
+        userState[chatId].quantity = quantity;
+        userState[chatId].step = 'enter_description';
+        bot.sendMessage(chatId, 'Введите описание к заказу (например, особые пожелания):');
+    }
+    else if (userState[chatId].step === 'enter_description') {
+        userState[chatId].description = text;
+        userState[chatId].step = 'enter_phone';
+        bot.sendMessage(chatId, 'Введите ваш контактный телефон:');
+    }
+    else if (userState[chatId].step === 'enter_phone') {
+        // Простая проверка формата телефона
+        if (!/^\+?\d{10,12}$/.test(text.replace(/\s/g, ''))) {
+            bot.sendMessage(chatId, 'Пожалуйста, введите корректный номер телефона (10-12 цифр).');
+            return;
+        }
+
+        userState[chatId].phone = text;
+        userState[chatId].step = 'enter_address';
+        bot.sendMessage(chatId, 'Введите адрес доставки:');
+    }
+    else if (userState[chatId].step === 'enter_address') {
+        try {
+            const order = {
+                clientId: chatId.toString(),
+                products: [{
+                    productId: userState[chatId].selectedProduct._id,
+                    quantity: userState[chatId].quantity
+                }],
+                description: userState[chatId].description,
+                status: 'В процессе',
+                totalAmount: userState[chatId].selectedProduct.price * userState[chatId].quantity,
+                paymentStatus: 'Не оплачено',
+                paymentMethod: 'Наличные',
+                shippingAddress: text,
+                contactPhone: userState[chatId].phone,
+                contactEmail: `${chatId}@telegram.com`
+            };
+
+            console.log('Creating order:', order);
+
+            const response = await axios.post('http://api:5000/api/orders', order);
+            console.log('Order creation response:', response.data);
+
+            const orderInfo = `Заказ успешно создан!\n\n` +
+                `Продукт: ${userState[chatId].selectedProduct.name}\n` +
+                `Количество: ${userState[chatId].quantity}\n` +
+                `Сумма: ${order.totalAmount} ₽\n` +
+                `Телефон: ${userState[chatId].phone}\n` +
+                `Адрес: ${text}\n` +
+                `Описание: ${userState[chatId].description}`;
+
+            bot.sendMessage(chatId, orderInfo);
+            bot.sendMessage(chatId, 'Что желаете сделать дальше?', mainMenu);
+
+            delete userState[chatId];
+        } catch (error) {
+            console.error('Error creating order:', error);
+            bot.sendMessage(chatId, 'Произошла ошибка при создании заказа. Пожалуйста, попробуйте снова.');
+            bot.sendMessage(chatId, 'Что желаете сделать дальше?', mainMenu);
         }
     }
 });
