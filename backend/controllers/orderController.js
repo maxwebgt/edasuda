@@ -1,86 +1,61 @@
 const Order = require('../models/orderModel');
-const mongoose = require('mongoose');
+
+/**
+ * Order Controller
+ * @author maxwebgt
+ * @lastModified 2025-02-22 16:25:40 UTC
+ */
+
+// Логгер для контроллера
+const log = (method, message, data = null) => {
+  const timestamp = new Date().toISOString();
+  console.log(`${timestamp} [OrderController:${method}] ${message}`,
+      data ? JSON.stringify(data, null, 2) : '');
+};
 
 // Получение всех заказов
 exports.getAllOrders = async (req, res) => {
   try {
-    const orders = await Order.find();
-    res.json(orders);
+    const orders = await Order.find().sort({ createdAt: -1 });
+    res.json({
+      success: true,
+      orders
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Ошибка при получении заказов' });
+    log('getAllOrders', 'Error', { error: error.message });
+    res.status(500).json({
+      success: false,
+      message: 'Ошибка при получении заказов',
+      error: error.message
+    });
   }
 };
 
-// Создание нового заказа
-exports.createOrder = async (req, res) => {
-  const {
-    clientId,
-    products,
-    status,
-    totalAmount,
-    paymentStatus,
-    paymentMethod,
-    shippingAddress,
-    contactEmail,
-    contactPhone,
-    description // Добавлено новое поле
-  } = req.body;
-
-  // Проверка на корректность значений paymentStatus и paymentMethod
-  const validPaymentStatuses = ['Оплачено', 'Не оплачено', 'В процессе'];
-  const validPaymentMethods = ['Наличные', 'Карта', 'Онлайн'];
-
-  if (!validPaymentStatuses.includes(paymentStatus)) {
-    return res.status(400).json({ message: 'Неверный статус оплаты' });
-  }
-
-  if (!validPaymentMethods.includes(paymentMethod)) {
-    return res.status(400).json({ message: 'Неверный метод оплаты' });
-  }
-
-  // Проверка, что в products есть обязательные поля
-  if (!products || !Array.isArray(products)) {
-    return res.status(400).json({ message: 'Необходимо передать продукты' });
-  }
-
-  const productsWithObjectId = products.map(product => {
-    // Проверка и преобразование productId в ObjectId
-    if (!mongoose.Types.ObjectId.isValid(product.productId)) {
-      return res.status(400).json({ message: `Неверный ID продукта: ${product.productId}` });
-    }
-    const { ObjectId } = mongoose.Types;
-    console.log('Product ID:', product.productId);
-    console.log('Is valid ObjectId:', mongoose.Types.ObjectId.isValid(product.productId));
-
-    product.productId = new ObjectId(product.productId);
-    // Проверка наличия quantity
-    if (!product.quantity || product.quantity <= 0) {
-      return res.status(400).json({ message: `Неверное количество для продукта с ID: ${product.productId}` });
-    }
-
-    return product;
-  });
+// Получение заказов по clientId
+exports.getOrdersByClientId = async (req, res) => {
+  const { clientId } = req.params;
+  log('getOrdersByClientId', 'Fetching orders', { clientId });
 
   try {
-    const newOrder = new Order({
-      clientId,
-      products: productsWithObjectId,
-      status,
-      totalAmount,
-      paymentStatus,
-      paymentMethod,
-      shippingAddress,
-      contactEmail,
-      contactPhone,
-      description: description || '' // Добавлено новое поле с значением по умолчанию
-    });
+    const orders = await Order.find({ clientId: String(clientId) })
+        .sort({ createdAt: -1 });
 
-    await newOrder.save();
-    res.status(201).json(newOrder);
+    log('getOrdersByClientId', `Found ${orders.length} orders`, { clientId });
+
+    res.json({
+      success: true,
+      orders
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Ошибка при создании заказа' });
+    log('getOrdersByClientId', 'Error fetching orders', {
+      error: error.message,
+      clientId
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Ошибка при получении заказов',
+      error: error.message
+    });
   }
 };
 
@@ -90,77 +65,161 @@ exports.getOrderById = async (req, res) => {
 
   try {
     const order = await Order.findById(id);
-
     if (!order) {
-      return res.status(404).json({ message: 'Заказ не найден' });
+      return res.status(404).json({
+        success: false,
+        message: 'Заказ не найден'
+      });
     }
 
-    res.json(order);
+    res.json({
+      success: true,
+      order
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Ошибка при получении заказа' });
+    log('getOrderById', 'Error', { error: error.message, orderId: id });
+    res.status(500).json({
+      success: false,
+      message: 'Ошибка при получении заказа',
+      error: error.message
+    });
+  }
+};
+
+// Создание заказа
+exports.createOrder = async (req, res) => {
+  log('createOrder', 'Received order data', req.body);
+
+  try {
+    const {
+      clientId,
+      telegramId,
+      phone,
+      products,
+      description,
+      status,
+      totalAmount,
+      paymentStatus,
+      paymentMethod,
+      paymentDetails,
+      shippingAddress,
+      deliveryInfo,
+      contactEmail,
+      contactPhone
+    } = req.body;
+
+    // Базовые проверки
+    if (!clientId) {
+      return res.status(400).json({ message: 'clientId обязателен' });
+    }
+
+    if (!phone) {
+      return res.status(400).json({ message: 'phone обязателен' });
+    }
+
+    if (!products || !Array.isArray(products) || products.length === 0) {
+      return res.status(400).json({ message: 'Необходимо указать продукты' });
+    }
+
+    // Создание заказа
+    const newOrder = new Order({
+      clientId: String(clientId),
+      telegramId: telegramId || null,
+      phone,
+      products: products.map(product => ({
+        productId: String(product.productId),
+        quantity: Number(product.quantity),
+        price: Number(product.price)
+      })),
+      description,
+      status,
+      totalAmount,
+      paymentStatus,
+      paymentMethod,
+      paymentDetails,
+      shippingAddress,
+      deliveryInfo,
+      contactEmail,
+      contactPhone
+    });
+
+    log('createOrder', 'Order object before save', {
+      clientId: newOrder.clientId,
+      telegramId: newOrder.telegramId,
+      phone: newOrder.phone,
+      productsCount: newOrder.products.length
+    });
+
+    await newOrder.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Заказ успешно создан',
+      order: newOrder
+    });
+  } catch (error) {
+    log('createOrder', 'Error creating order', {
+      error: error.message,
+      stack: error.stack
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Ошибка при создании заказа',
+      error: error.message
+    });
   }
 };
 
 // Обновление заказа
 exports.updateOrder = async (req, res) => {
   const { id } = req.params;
-  const {
-    clientId,
-    products,
-    status,
-    totalAmount,
-    paymentStatus,
-    paymentMethod,
-    shippingAddress,
-    contactEmail,
-    contactPhone,
-    description // Добавлено новое поле
-  } = req.body;
-
-  // Проверка на корректность значений paymentStatus и paymentMethod
-  const validPaymentStatuses = ['Оплачено', 'Не оплачено', 'В процессе'];
-  const validPaymentMethods = ['Наличные', 'Карта', 'Онлайн'];
-
-  if (!validPaymentStatuses.includes(paymentStatus)) {
-    return res.status(400).json({ message: 'Неверный статус оплаты' });
-  }
-
-  if (!validPaymentMethods.includes(paymentMethod)) {
-    return res.status(400).json({ message: 'Неверный метод оплаты' });
-  }
-
-  // Преобразование productId в ObjectId для всех продуктов
-  const productsWithObjectId = products.map(product => {
-    if (!mongoose.Types.ObjectId.isValid(product.productId)) {
-      return res.status(400).json({ message: `Неверный ID продукта: ${product.productId}` });
-    }
-    product.productId = new mongoose.Types.ObjectId(product.productId);
-    return product;
-  });
+  const updateData = req.body;
 
   try {
     const order = await Order.findById(id);
 
     if (!order) {
-      return res.status(404).json({ message: 'Заказ не найден' });
+      return res.status(404).json({
+        success: false,
+        message: 'Заказ не найден'
+      });
     }
 
-    order.clientId = clientId || order.clientId;
-    order.products = productsWithObjectId || order.products;
-    order.status = status || order.status;
-    order.totalAmount = totalAmount || order.totalAmount;
-    order.paymentStatus = paymentStatus || order.paymentStatus;
-    order.paymentMethod = paymentMethod || order.paymentMethod;
-    order.shippingAddress = shippingAddress || order.shippingAddress;
-    order.contactEmail = contactEmail || order.contactEmail;
-    order.contactPhone = contactPhone || order.contactPhone;
-    order.description = description !== undefined ? description : order.description; // Добавлено обновление description
+    Object.keys(updateData).forEach(key => {
+      if (updateData[key] !== undefined) {
+        if (key === 'products') {
+          order.products = updateData.products.map(product => ({
+            productId: String(product.productId),
+            quantity: Number(product.quantity),
+            price: Number(product.price)
+          }));
+        } else {
+          order[key] = updateData[key];
+        }
+      }
+    });
 
     await order.save();
-    res.json(order);
+
+    log('updateOrder', 'Order updated successfully', {
+      orderId: order._id,
+      clientId: order.clientId
+    });
+
+    res.json({
+      success: true,
+      message: 'Заказ успешно обновлен',
+      order
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: 'Ошибка при обновлении заказа' });
+    log('updateOrder', 'Error updating order', {
+      error: error.message,
+      orderId: id
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Ошибка при обновлении заказа',
+      error: error.message
+    });
   }
 };

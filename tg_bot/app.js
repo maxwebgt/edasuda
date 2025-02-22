@@ -1,3 +1,9 @@
+/**
+ * Telegram Bot for E-commerce
+ * @lastModified 2025-02-22 17:03:33 UTC
+ * @user maxwebgt
+ */
+
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
@@ -5,9 +11,7 @@ const express = require('express');
 const FormData = require('form-data');
 const app = express();
 
-// We work with our database via our API, not connecting directly to MongoDB.
-
-// Get the Telegram Bot Token from environment variables.
+// Get the Telegram Bot Token from environment variables
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
     console.error('Telegram bot token is missing in the environment variables.');
@@ -16,12 +20,10 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: true });
 
-// In-memory state for flows and last messages for deletion.
+// In-memory state for flows and last messages for deletion
 const userState = {};
 const lastBotMessages = {};
 
-// Function to prepare reply markup. If options.reply_markup contains an inline_keyboard,
-// it returns that; otherwise, it returns a default reply keyboard.
 function prepareReplyMarkup(options = {}) {
     console.log('[prepareReplyMarkup] Incoming options:', options);
     if (options.reply_markup) {
@@ -51,7 +53,6 @@ function prepareReplyMarkup(options = {}) {
     return replyKeyboard;
 }
 
-// Function to send a message and delete previous bot message if available.
 async function sendMessageWithDelete(chatId, text, options = {}) {
     try {
         if (lastBotMessages[chatId]) {
@@ -81,7 +82,6 @@ async function sendMessageWithDelete(chatId, text, options = {}) {
     }
 }
 
-// Function to send a photo with deletion of previous message if available.
 async function sendPhotoWithDelete(chatId, photo, options = {}) {
     try {
         if (lastBotMessages[chatId]) {
@@ -108,7 +108,6 @@ async function sendPhotoWithDelete(chatId, photo, options = {}) {
     }
 }
 
-// Main menu reply keyboard.
 const mainMenu = {
     reply_markup: {
         keyboard: [
@@ -121,14 +120,12 @@ const mainMenu = {
     }
 };
 
-// Handler for the /start command.
-// When a user sends /start, we check via our API if a user exists in the "users" collection by telegramId (which we set to msg.from.username).
-// If no user exists, we try to create one with role "client".
+// Handler for /start command
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     console.log(`[onText /start] Received /start from chat ${chatId}`);
 
-    const telegramLogin = msg.from.username || "";
+    const telegramLogin = msg.from.username || '';
     if (!telegramLogin) {
         console.error(`[onText /start] Telegram login is missing for chat ${chatId}. Cannot create user.`);
     } else {
@@ -162,7 +159,7 @@ bot.onText(/\/start/, async (msg) => {
     await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! Вот что у нас сейчас есть вкусненького:', mainMenu);
 });
 
-// Inline button callbacks.
+// Inline button callbacks
 bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const data = callbackQuery.data;
@@ -250,7 +247,7 @@ bot.on('callback_query', async (callbackQuery) => {
     }
 });
 
-// Handling text messages from the reply keyboard.
+// Handling text messages
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
@@ -267,7 +264,11 @@ bot.on('message', async (msg) => {
                 return [{ text: product.name, callback_data: `product_${index}` }];
             });
             productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
-            userState[chatId] = { step: 'select_product', products };
+            userState[chatId] = {
+                step: 'select_product',
+                products,
+                telegramId: msg.from.username
+            };
             await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', {
                 reply_markup: JSON.stringify({ inline_keyboard: productButtons })
             });
@@ -318,8 +319,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Handling the "Управление" button from the reply keyboard.
-    // It sends an inline keyboard with the "Добавить продукт" option.
     if (text === 'Управление') {
         const managementMenu = {
             reply_markup: JSON.stringify({
@@ -417,19 +416,45 @@ bot.on('message', async (msg) => {
         try {
             const order = {
                 clientId: chatId.toString(),
+                telegramId: msg.from.username || null,
+                phone: userState[chatId].phone,
                 products: [{
                     productId: userState[chatId].selectedProduct._id,
-                    quantity: userState[chatId].quantity
+                    quantity: userState[chatId].quantity,
+                    price: userState[chatId].selectedProduct.price
                 }],
                 description: userState[chatId].description,
-                status: 'В процессе',
+                status: 'Новый',
                 totalAmount: userState[chatId].selectedProduct.price * userState[chatId].quantity,
-                paymentStatus: 'Не оплачено',
+                paymentStatus: 'Ожидает оплаты',
                 paymentMethod: 'Наличные',
+                paymentDetails: {
+                    paidAmount: 0,
+                    paymentDate: null,
+                    transactionId: null,
+                    paymentProvider: null,
+                    receiptNumber: null
+                },
                 shippingAddress: text,
+                deliveryInfo: {
+                    type: 'Курьер',
+                    trackingNumber: null,
+                    courierName: null,
+                    courierPhone: null,
+                    estimatedDeliveryDate: null,
+                    actualDeliveryDate: null,
+                    deliveryInstructions: userState[chatId].description
+                },
+                contactEmail: `${chatId}@telegram.com`,
                 contactPhone: userState[chatId].phone,
-                contactEmail: `${chatId}@telegram.com`
+                statusHistory: [{
+                    status: 'Новый',
+                    timestamp: new Date(),
+                    comment: 'Заказ создан через Telegram бота',
+                    updatedBy: 'system'
+                }]
             };
+            console.log('Creating order with data:', JSON.stringify(order, null, 2));
             await axios.post('http://api:5000/api/orders', order);
             const orderInfo = `Заказ успешно создан!\n\n` +
                 `Продукт: ${userState[chatId].selectedProduct.name}\n` +
@@ -437,7 +462,9 @@ bot.on('message', async (msg) => {
                 `Сумма: ${order.totalAmount} ₽\n` +
                 `Телефон: ${userState[chatId].phone}\n` +
                 `Адрес: ${text}\n` +
-                `Описание: ${userState[chatId].description}`;
+                `Описание: ${userState[chatId].description}\n\n` +
+                `Статус заказа: ${order.status}\n` +
+                `Статус оплаты: ${order.paymentStatus}`;
             await sendMessageWithDelete(chatId, orderInfo);
             setTimeout(async () => {
                 await sendMessageWithDelete(chatId, 'Что желаете сделать дальше?', mainMenu);
@@ -445,7 +472,8 @@ bot.on('message', async (msg) => {
             delete userState[chatId];
         } catch (error) {
             console.error('Error creating order:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при создании заказа. Пожалуйста, попробуйте снова.');
+            const errorMessage = error.response?.data?.message || 'Произошла ошибка при создании заказа';
+            await sendMessageWithDelete(chatId, `Ошибка: ${errorMessage}. Пожалуйста, попробуйте снова.`);
             setTimeout(async () => {
                 await sendMessageWithDelete(chatId, 'Что желаете сделать дальше?', mainMenu);
             }, 2000);

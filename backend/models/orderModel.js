@@ -1,71 +1,155 @@
 const mongoose = require('mongoose');
 
+/**
+ * Order Model
+ * @author maxwebgt
+ * @lastModified 2025-02-22 16:25:40 UTC
+ */
+
 const orderSchema = new mongoose.Schema({
     clientId: {
         type: String,
-        required: true,
+        required: true
     },
-    description: {  // Добавлено новое поле
+    telegramId: {
         type: String,
-        default: '', // Пустая строка по умолчанию
+        default: null
     },
-    products: [
-        {
-            productId: {
-                type: mongoose.Schema.Types.ObjectId,
-                ref: 'Product',
-                required: true,
-            },
-            quantity: {
-                type: Number,
-                required: true,
-            },
+    phone: {
+        type: String,
+        required: true
+    },
+    products: [{
+        productId: {
+            type: String,
+            required: true
         },
-    ],
+        quantity: {
+            type: Number,
+            required: true,
+            min: 1
+        },
+        price: {
+            type: Number,
+            required: true,
+            min: 0
+        }
+    }],
+    description: {
+        type: String,
+        default: ''
+    },
     status: {
         type: String,
-        default: 'В процессе',
+        enum: [
+            'Новый',
+            'Принят в работу',
+            'Готовится',
+            'Готов к отправке',
+            'В доставке',
+            'Доставлен',
+            'Завершён',
+            'Отменён',
+            'Возврат'
+        ],
+        default: 'Новый'
     },
     totalAmount: {
         type: Number,
         required: true,
-        default: 0, // Общая стоимость заказа, рассчитывается при создании заказа
+        min: 0
     },
     paymentStatus: {
         type: String,
-        enum: ['Оплачено', 'Не оплачено', 'В процессе'],
-        default: 'Не оплачено',
+        enum: [
+            'Ожидает оплаты',
+            'Частично оплачен',
+            'Полностью оплачен',
+            'Ошибка оплаты',
+            'Возврат средств',
+            'Возврат выполнен',
+            'Платёж отклонён'
+        ],
+        default: 'Ожидает оплаты'
     },
     paymentMethod: {
         type: String,
-        enum: ['Наличные', 'Карта', 'Онлайн'],
-        default: 'Наличные',
+        enum: [
+            'Наличные',
+            'Карта при получении',
+            'Онлайн оплата',
+            'СБП',
+            'Криптовалюта'
+        ],
+        default: 'Наличные'
+    },
+    paymentDetails: {
+        transactionId: String,
+        paidAmount: {
+            type: Number,
+            default: 0
+        },
+        paymentDate: Date,
+        paymentProvider: String,
+        receiptNumber: String
     },
     shippingAddress: {
         type: String,
-        required: true,
+        required: true
+    },
+    deliveryInfo: {
+        type: {
+            type: String,
+            enum: ['Самовывоз', 'Курьер', 'Почта', 'Транспортная компания'],
+            default: 'Курьер'
+        },
+        trackingNumber: String,
+        courierName: String,
+        courierPhone: String,
+        estimatedDeliveryDate: Date,
+        actualDeliveryDate: Date,
+        deliveryInstructions: String
     },
     contactEmail: {
         type: String,
-        required: true,
+        required: true
     },
     contactPhone: {
         type: String,
-        required: true,
+        required: true
     },
-    createdAt: {
-        type: Date,
-        default: Date.now, // Дата создания заказа
-    },
-    updatedAt: {
-        type: Date,
-        default: Date.now, // Дата последнего обновления заказа
-    },
+    statusHistory: [{
+        status: String,
+        timestamp: {
+            type: Date,
+            default: Date.now
+        },
+        comment: String,
+        updatedBy: String
+    }]
+}, {
+    timestamps: true
 });
 
-// Автоматически обновляем updatedAt при каждом изменении
+// Middleware для логирования
 orderSchema.pre('save', function(next) {
-    this.updatedAt = Date.now();
+    if (this.isModified('status')) {
+        this.statusHistory.push({
+            status: this.status,
+            timestamp: new Date(),
+            comment: 'Статус изменен системой',
+            updatedBy: 'system'
+        });
+    }
+
+    console.log(`${new Date().toISOString()} [OrderModel:save] Saving order:`, {
+        orderId: this._id,
+        clientId: this.clientId,
+        telegramId: this.telegramId,
+        status: this.status,
+        paymentStatus: this.paymentStatus,
+        totalAmount: this.totalAmount
+    });
     next();
 });
 
