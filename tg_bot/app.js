@@ -1,6 +1,6 @@
 /**
  * Telegram Bot for E-commerce
- * @lastModified 2025-02-23 00:55:00 UTC
+ * @lastModified 2025-02-23 02:40:00 UTC
  * @user maxwebgt
  */
 
@@ -40,13 +40,13 @@ function prepareReplyMarkup(options = {}) {
             console.error('[prepareReplyMarkup] Error parsing reply_markup:', error);
         }
     }
-    // Updated keyboard layout for meat products:
-    // Row 1: "🥩 Каталог" and "📋 Заказы"
+    // Updated keyboard layout:
+    // Row 1: "🍞 Каталог" (bread icon for neutrality and vegan-friendly) and "📋 Заказы"
     // Row 2: "⚙️ Управление"
     // Row 3: "❓ Помощь"
     const replyKeyboard = {
         keyboard: [
-            ['🥩 Каталог', '📋 Заказы'],
+            ['🍞 Каталог', '📋 Заказы'],
             ['⚙️ Управление'],
             ['❓ Помощь']
         ],
@@ -67,10 +67,7 @@ async function sendMessageWithDelete(chatId, text, options = {}) {
             }
         }
         const replyMarkup = prepareReplyMarkup(options);
-        const messageOptions = {
-            ...options,
-            reply_markup: replyMarkup,
-        };
+        const messageOptions = { ...options, reply_markup: replyMarkup };
         console.log(
             `[sendMessageWithDelete] Sending message to chat ${chatId} with text: "${text}" and options:`,
             messageOptions
@@ -96,10 +93,7 @@ async function sendPhotoWithDelete(chatId, photo, options = {}) {
             }
         }
         const replyMarkup = prepareReplyMarkup(options);
-        const messageOptions = {
-            ...options,
-            reply_markup: replyMarkup,
-        };
+        const messageOptions = { ...options, reply_markup: replyMarkup };
         console.log(`[sendPhotoWithDelete] Sending photo to chat ${chatId} with options:`, messageOptions);
         const message = await bot.sendPhoto(chatId, photo, messageOptions);
         lastBotMessages[chatId] = message.message_id;
@@ -111,11 +105,10 @@ async function sendPhotoWithDelete(chatId, photo, options = {}) {
     }
 }
 
-// Main menu with updated icons for meat products
 const mainMenu = {
     reply_markup: {
         keyboard: [
-            ['🥩 Каталог', '📋 Заказы'],
+            ['🍞 Каталог', '📋 Заказы'],
             ['⚙️ Управление'],
             ['❓ Помощь']
         ],
@@ -123,7 +116,6 @@ const mainMenu = {
     },
 };
 
-// Handler for /start command
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     console.log(`[onText /start] Received /start from chat ${chatId}`);
@@ -140,11 +132,7 @@ bot.onText(/\/start/, async (msg) => {
             const existingUser = users.find((u) => u.telegramId === telegramLogin);
             if (!existingUser) {
                 console.log(`[onText /start] No user found with telegramId "${telegramLogin}". Creating new user.`);
-                const payload = {
-                    telegramId: telegramLogin,
-                    role: 'client',
-                    username: telegramLogin,
-                };
+                const payload = { telegramId: telegramLogin, role: 'client', username: telegramLogin };
                 console.log(`[onText /start] Creating user with payload:`, payload);
                 await axios.post(apiUrlUsers, payload);
                 console.log(`[onText /start] New user created with telegramId: ${telegramLogin}`);
@@ -158,21 +146,61 @@ bot.onText(/\/start/, async (msg) => {
             }
         }
     }
-    // Updated greeting with meat-related emojis for a warm welcome.
-    await sendMessageWithDelete(
-        chatId,
-        'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲',
-        mainMenu
-    );
+    await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
 });
 
-// Inline button callbacks
 bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const data = callbackQuery.data;
     console.log(`Received callback query from ${chatId}: ${data}`);
 
-    if (data === 'view_products') {
+    if (data.startsWith('view_order_')) {
+        const orderId = data.split('_')[2];
+        console.log(`[Order View] Viewing order with id: ${orderId}`);
+        let orderDetails;
+        try {
+            const response = await axios.get(`http://api:5000/api/orders/${orderId}`);
+            orderDetails = response.data;
+            console.log(`[Order View] Retrieved order details:`, orderDetails);
+        } catch (error) {
+            console.error(`[Order View] Error fetching details for order ${orderId}:`, error.message);
+            await sendMessageWithDelete(chatId, `Ошибка: не удалось получить данные заказа ${orderId}`);
+            return;
+        }
+        const order = orderDetails.order || orderDetails;
+        console.log('[Order View] Using order object:', order);
+        let detailsText = `Заказ №${order._id}\n`;
+        detailsText += `Статус: ${order.status}\n`;
+        detailsText += `Сумма: ${order.totalAmount} ₽\n`;
+        detailsText += `Адрес доставки: ${order.shippingAddress}\n`;
+        if (order.statusHistory && order.statusHistory.length > 0) {
+            detailsText += `Дата создания: ${new Date(order.statusHistory[0].timestamp).toLocaleString()}\n`;
+        }
+        const inlineKeyboard = {
+            inline_keyboard: [
+                [{ text: '❌ Отменить', callback_data: `cancel_order_${order._id}` }],
+                [{ text: '⬅️ Назад', callback_data: 'orders_list' }]
+            ]
+        };
+        await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
+    }
+    else if (data === 'orders_list') {
+        await displayOrdersList(chatId);
+    }
+    else if (data.startsWith('cancel_order_')) {
+        const orderId = data.split('_')[2];
+        console.log(`[Order Cancel] Received request to cancel order with id: ${orderId}`);
+        try {
+            console.log(`[Order Cancel] Sending API request to cancel order ${orderId}`);
+            const cancelResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, { status: 'Отменён' });
+            console.log(`[Order Cancel] Response from API:`, cancelResponse.data);
+            await sendMessageWithDelete(chatId, `Заказ ${orderId} успешно отменён! ❌`);
+        } catch (error) {
+            console.error(`[Order Cancel] Error cancelling order ${orderId}:`, error.message);
+            await sendMessageWithDelete(chatId, `Ошибка при отмене заказа ${orderId}. Попробуйте снова.`);
+        }
+    }
+    else if (data === 'view_products') {
         try {
             console.log('Fetching products from API');
             const response = await axios.get('http://api:5000/api/products');
@@ -194,35 +222,25 @@ bot.on('callback_query', async (callbackQuery) => {
             console.error('Error fetching products:', error);
             await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка продуктов.');
         }
-    } else if (data.startsWith('product_')) {
+    }
+    else if (data.startsWith('product_')) {
         const index = parseInt(data.split('_')[1], 10);
         const selectedProduct = userState[chatId].products[index];
         const productInfo = `Вы выбрали продукт: ${selectedProduct.name}\nОписание: ${selectedProduct.description}\nЦена: ${selectedProduct.price} ₽`;
-        userState[chatId] = {
-            step: 'view_product',
-            selectedProduct: selectedProduct,
-            products: userState[chatId].products,
-        };
+        userState[chatId] = { step: 'view_product', selectedProduct, products: userState[chatId].products };
         const productActionButtons = {
             reply_markup: JSON.stringify({
                 inline_keyboard: [
-                    [
-                        { text: '🛍 Купить', callback_data: 'buy_product' },
-                        { text: '⬅️ Назад', callback_data: 'back_to_products' },
-                    ],
-                ],
+                    [{ text: '🛍 Купить', callback_data: 'buy_product' },
+                        { text: '⬅️ Назад', callback_data: 'back_to_products' }]
+                ]
             }),
         };
         if (selectedProduct.filename || selectedProduct.image) {
             try {
                 const filename = selectedProduct.filename || selectedProduct.image;
-                const imageResponse = await axios.get(`http://api:5000/api/images/file/${filename}`, {
-                    responseType: 'arraybuffer',
-                });
-                await sendPhotoWithDelete(chatId, Buffer.from(imageResponse.data), {
-                    caption: productInfo,
-                    ...productActionButtons,
-                });
+                const imageResponse = await axios.get(`http://api:5000/api/images/file/${filename}`, { responseType: 'arraybuffer' });
+                await sendPhotoWithDelete(chatId, Buffer.from(imageResponse.data), { caption: productInfo, ...productActionButtons });
             } catch (error) {
                 console.error('Error sending photo:', error);
                 await sendMessageWithDelete(chatId, productInfo, productActionButtons);
@@ -230,44 +248,67 @@ bot.on('callback_query', async (callbackQuery) => {
         } else {
             await sendMessageWithDelete(chatId, productInfo, productActionButtons);
         }
-    } else if (data === 'back_to_products') {
+    }
+    else if (data === 'back_to_products') {
         const products = userState[chatId].products;
         const productButtons = products.map((product, index) => {
             return [{ text: product.name, callback_data: `product_${index}` }];
         });
         productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
         userState[chatId].step = 'select_product';
-        await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', {
-            reply_markup: JSON.stringify({ inline_keyboard: productButtons }),
-        });
-    } else if (data === 'back_to_main') {
+        await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
+    }
+    else if (data === 'back_to_main') {
         userState[chatId] = { step: 'main_menu' };
-        await sendMessageWithDelete(
-            chatId,
-            'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲',
-            mainMenu
-        );
-    } else if (data === 'buy_product') {
+        await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
+    }
+    else if (data === 'buy_product') {
         userState[chatId].step = 'enter_quantity';
         await sendMessageWithDelete(chatId, 'Пожалуйста, введите желаемое количество:');
-    } else if (data === 'add_product') {
-        // Changed icon for "add product" button: added "➕"
+    }
+    else if (data === 'add_product') {
         userState[chatId] = { step: 'add_product_name' };
         await sendMessageWithDelete(chatId, 'Введите название продукта: (пример: ➕ Новый продукт)');
-    } else if (data === 'help') {
-        await sendMessageWithDelete(
-            chatId,
-            'Вот что можно сделать:\n1. Просмотреть продукты\n2. Оформить заказ\n3. Добавить продукт'
-        );
+    }
+    else if (data === 'help') {
+        await sendMessageWithDelete(chatId, 'Вот что можно сделать:\n1. Просмотреть продукты\n2. Оформить заказ\n3. Добавить продукт');
     }
 });
 
-// Handling text messages
+async function displayOrdersList(chatId) {
+    const ordersUrl = `http://api:5000/api/orders/client/${chatId}`;
+    console.log(`[Orders List] Requesting orders from URL: ${ordersUrl}`);
+    try {
+        const response = await axios.get(ordersUrl);
+        let orders = [];
+        if (Array.isArray(response.data)) {
+            orders = response.data;
+        } else if (response.data.orders) {
+            orders = response.data.orders;
+        }
+        if (orders.length === 0) {
+            await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
+            return;
+        }
+        console.log('[Orders List] Returned orders:', JSON.stringify(orders, null, 2));
+        const inlineKeyboard = orders.map(order => {
+            return [{
+                text: `Заказ №${order._id} - ${order.totalAmount} ₽`,
+                callback_data: `view_order_${order._id}`
+            }];
+        });
+        const keyboardOptions = { inline_keyboard: inlineKeyboard };
+        await sendMessageWithDelete(chatId, 'Ваши заказы:', { reply_markup: JSON.stringify(keyboardOptions) });
+    } catch (error) {
+        console.error('[Orders List] Error fetching orders:', error.message);
+        await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка заказов.');
+    }
+}
+
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
-
-    if (text === '🥩 Каталог') {
+    if (text === '🍞 Каталог') {
         try {
             const response = await axios.get('http://api:5000/api/products');
             const products = response.data;
@@ -280,86 +321,22 @@ bot.on('message', async (msg) => {
             });
             productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
             userState[chatId] = { step: 'select_product', products, telegramId: msg.from.username };
-            await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', {
-                reply_markup: JSON.stringify({ inline_keyboard: productButtons }),
-            });
+            await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
         } catch (error) {
             console.error('Error fetching products:', error);
             await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка продуктов.');
         }
         return;
     }
-
     if (text === '📋 Заказы') {
-        const ordersUrl = `http://api:5000/api/orders/client/${chatId}`;
-        console.log(`[Заказы] Requesting orders from URL: ${ordersUrl}`);
-        try {
-            const response = await axios.get(ordersUrl);
-            let orders = [];
-            if (Array.isArray(response.data)) {
-                orders = response.data;
-            } else if (response.data.orders) {
-                orders = response.data.orders;
-            }
-            if (orders.length === 0) {
-                await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
-                return;
-            }
-
-            console.log('[Заказы] Returned orders:', JSON.stringify(orders, null, 2));
-
-            let ordersList = 'Ваши заказы:\n\n';
-            for (const order of orders) {
-                ordersList += `Заказ №${order._id}\n`;
-                ordersList += `Статус: ${order.status}\n`;
-                ordersList += `Сумма: ${order.totalAmount} ₽\n`;
-                ordersList += `Оплата: ${order.paymentStatus}\n`;
-                ordersList += `Адрес доставки: ${order.shippingAddress}\n`;
-                if (order.statusHistory && order.statusHistory.length > 0) {
-                    ordersList += `Дата создания: ${new Date(order.statusHistory[0].timestamp).toLocaleString()}\n`;
-                }
-                if (order.products && order.products.length > 0) {
-                    ordersList += 'Состав заказа:\n';
-                    for (const [index, prod] of order.products.entries()) {
-                        console.log(`[Заказы] Order ${order._id} product ${index + 1}:`, prod);
-                        const pId = prod.productId;
-                        console.log(`[Заказы] Fetching product details by id: ${pId}`);
-                        try {
-                            const prodResponse = await axios.get(`http://api:5000/api/products/${pId}`);
-                            const productDetails = prodResponse.data;
-                            console.log(`[Заказы] Returned product details:`, productDetails);
-                            const productName = productDetails.name;
-                            ordersList += `  ${index + 1}. ${productName} `;
-                        } catch (prodError) {
-                            console.error(`[Заказы] Error fetching product ${pId} details:`, prodError.message);
-                            ordersList += `  ${index + 1}. [Данные не получены] `;
-                        }
-                        if (prod.quantity) {
-                            ordersList += `x ${prod.quantity} `;
-                        }
-                        if (prod.price) {
-                            ordersList += `, Цена: ${prod.price} ₽, `;
-                            ordersList += `Итого: ${prod.price * prod.quantity} ₽\n`;
-                        }
-                    }
-                }
-                ordersList += '---------------\n';
-            }
-            await sendMessageWithDelete(chatId, ordersList);
-        } catch (error) {
-            console.error('[Заказы] Error fetching orders:', error.message);
-            console.error('[Заказы] Error details:', error.config);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка заказов.');
-        }
+        await displayOrdersList(chatId);
         return;
     }
-
     if (text === '❓ Помощь') {
-        await sendMessageWithDelete(
-            chatId,
+        await sendMessageWithDelete(chatId,
             'Вот что можно сделать:\n\n' +
-            '1. 🥩 Каталог - просмотр всех доступных продуктов\n' +
-            '2. 📋 Заказы - просмотр ваших заказов (подробная информация и состав заказа)\n' +
+            '1. 🍞 Каталог - просмотр всех доступных продуктов\n' +
+            '2. 📋 Заказы - просмотр ваших заказов (подробная информация и отмена заказа)\n' +
             '3. ❓ Помощь - показать это сообщение\n\n' +
             'Для совершения покупки:\n' +
             '1. Откройте каталог\n' +
@@ -369,24 +346,21 @@ bot.on('message', async (msg) => {
         );
         return;
     }
-
     if (text === '⚙️ Управление') {
         const managementMenu = {
             reply_markup: JSON.stringify({
                 inline_keyboard: [
                     [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
-                    [{ text: '⬅️ Назад', callback_data: 'back_to_main' }],
+                    [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
                 ],
             }),
         };
         await sendMessageWithDelete(chatId, 'Панель управления:', managementMenu);
         return;
     }
-
     if (!userState[chatId]) {
         return;
     }
-
     if (userState[chatId].step === 'add_product_name') {
         userState[chatId].productName = text;
         userState[chatId].step = 'add_product_description';
@@ -418,13 +392,8 @@ bot.on('message', async (msg) => {
             const timestamp = Date.now();
             const filename = `${timestamp}.jpg`;
             const form = new FormData();
-            form.append('image', buffer, {
-                filename: filename,
-                contentType: 'image/jpeg',
-            });
-            const imageResponse = await axios.post('http://api:5000/api/images/upload', form, {
-                headers: form.getHeaders(),
-            });
+            form.append('image', buffer, { filename: filename, contentType: 'image/jpeg' });
+            const imageResponse = await axios.post('http://api:5000/api/images/upload', form, { headers: form.getHeaders() });
             const newProduct = {
                 name: userState[chatId].productName,
                 description: userState[chatId].productDescription,
@@ -469,67 +438,32 @@ bot.on('message', async (msg) => {
                 clientId: chatId.toString(),
                 telegramId: msg.from.username || null,
                 phone: userState[chatId].phone,
-                products: [
-                    {
-                        productId: userState[chatId].selectedProduct._id,
-                        name: userState[chatId].selectedProduct.name,
-                        quantity: userState[chatId].quantity,
-                        price: userState[chatId].selectedProduct.price,
-                    },
-                ],
+                products: [{
+                    productId: userState[chatId].selectedProduct._id,
+                    name: userState[chatId].selectedProduct.name,
+                    quantity: userState[chatId].quantity,
+                    price: userState[chatId].selectedProduct.price,
+                }],
                 description: userState[chatId].description,
                 status: 'Новый',
                 totalAmount: userState[chatId].selectedProduct.price * userState[chatId].quantity,
                 paymentStatus: 'Ожидает оплаты',
                 paymentMethod: 'Наличные',
-                paymentDetails: {
-                    paidAmount: 0,
-                    paymentDate: null,
-                    transactionId: null,
-                    paymentProvider: null,
-                    receiptNumber: null,
-                },
+                paymentDetails: { paidAmount: 0, paymentDate: null, transactionId: null, paymentProvider: null, receiptNumber: null },
                 shippingAddress: text,
-                deliveryInfo: {
-                    type: 'Курьер',
-                    trackingNumber: null,
-                    courierName: null,
-                    courierPhone: null,
-                    estimatedDeliveryDate: null,
-                    actualDeliveryDate: null,
-                    deliveryInstructions: userState[chatId].description,
-                },
+                deliveryInfo: { type: 'Курьер', trackingNumber: null, courierName: null, courierPhone: null, estimatedDeliveryDate: null, actualDeliveryDate: null, deliveryInstructions: userState[chatId].description },
                 contactEmail: `${chatId}@telegram.com`,
                 contactPhone: userState[chatId].phone,
-                statusHistory: [
-                    {
-                        status: 'Новый',
-                        timestamp: new Date(),
-                        comment: 'Заказ создан через Telegram бота',
-                        updatedBy: 'system',
-                    },
-                ],
+                statusHistory: [{ status: 'Новый', timestamp: new Date(), comment: 'Заказ создан через Telegram бота', updatedBy: 'system' }]
             };
             console.log('Creating order with data:', JSON.stringify(order, null, 2));
             await axios.post('http://api:5000/api/orders', order);
-            let orderInfo = `Заказ успешно создан!\n\n` +
-                `Продукт: ${userState[chatId].selectedProduct.name}\n` +
-                `Количество: ${userState[chatId].quantity}\n` +
-                `Сумма: ${order.totalAmount} ₽\n` +
-                `Телефон: ${userState[chatId].phone}\n` +
-                `Адрес доставки: ${text}\n` +
-                `Описание: ${userState[chatId].description}\n\n` +
-                `Статус: ${order.status}\n` +
-                `Оплата: ${order.paymentStatus}\n\n` +
-                `Состав заказа:\n`;
+            let orderInfo = `Заказ успешно создан!\n\nПродукт: ${userState[chatId].selectedProduct.name}\nКоличество: ${userState[chatId].quantity}\nСумма: ${order.totalAmount} ₽\nТелефон: ${userState[chatId].phone}\nАдрес доставки: ${text}\nОписание: ${userState[chatId].description}\n\nСтатус: ${order.status}\nОплата: ${order.paymentStatus}\n\nСостав заказа:\n`;
             order.products.forEach((prod, index) => {
                 orderInfo += `  ${index + 1}. ${prod.name} `;
-                if (prod.quantity) {
-                    orderInfo += `x ${prod.quantity} `;
-                }
+                if (prod.quantity) { orderInfo += `x ${prod.quantity} `; }
                 if (prod.price) {
-                    orderInfo += `— Цена за штуку: ${prod.price} ₽, `;
-                    orderInfo += `Итого: ${prod.price * prod.quantity} ₽\n`;
+                    orderInfo += `— Цена за штуку: ${prod.price} ₽, Итого: ${prod.price * prod.quantity} ₽\n`;
                 }
             });
             await sendMessageWithDelete(chatId, orderInfo);
