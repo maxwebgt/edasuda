@@ -1,6 +1,6 @@
 /**
  * Telegram Bot for E-commerce
- * @lastModified 2025-02-22 17:03:33 UTC
+ * @lastModified 2025-02-23 00:10:00 UTC
  * @user maxwebgt
  */
 
@@ -284,7 +284,15 @@ bot.on('message', async (msg) => {
         console.log(`[Заказы] Requesting orders from URL: ${ordersUrl}`);
         try {
             const response = await axios.get(ordersUrl);
-            const orders = response.data;
+            // Here we check if the response is an array or an object with orders field
+            let orders = [];
+            if (Array.isArray(response.data)) {
+                orders = response.data;
+            } else if (response.data.orders) {
+                orders = response.data.orders;
+            } else {
+                orders = [];
+            }
             if (orders.length === 0) {
                 await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
                 return;
