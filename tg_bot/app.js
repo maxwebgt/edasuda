@@ -1,7 +1,16 @@
 /**
  * Telegram Bot for E-commerce
- * @lastModified 2025-02-23 06:55:00 UTC
+ * @lastModified 2025-02-23 06:57:26 UTC
  * @user maxwebgt
+ *
+ * This solution notifies the user who placed an order about any status changes.
+ * After updating the order status via a callback (update_status), the bot updates the
+ * order via the API and sends a notification in the chat that performed the update.
+ * In addition, it always sends a notification to the order creator using the clientId
+ * (field order.clientId), even if that user is the one performing the operation.
+ *
+ * Change: For "regular orders" (i.e. not "My orders") the additional information view includes
+ * a "Cancel Order" button.
  */
 
 require('dotenv').config();
@@ -31,14 +40,18 @@ function getByteLength(str) {
     return Buffer.byteLength(str, 'utf8');
 }
 
+/**
+ * Prepares reply markup for messages.
+ * If inline_keyboard is provided, returns it; else returns the default keyboard.
+ */
 function prepareReplyMarkup(options = {}) {
     console.log('[prepareReplyMarkup] Incoming options:', options);
-    // Check for inline_keyboard; if provided, return it accordingly.
     if (options.reply_markup) {
         try {
-            const markup = typeof options.reply_markup === 'string'
-                ? JSON.parse(options.reply_markup)
-                : options.reply_markup;
+            const markup =
+                typeof options.reply_markup === 'string'
+                    ? JSON.parse(options.reply_markup)
+                    : options.reply_markup;
             console.log('[prepareReplyMarkup] Parsed markup:', markup);
             if (markup.inline_keyboard) {
                 console.log('[prepareReplyMarkup] Detected inline_keyboard. Returning inline markup.');
@@ -48,7 +61,6 @@ function prepareReplyMarkup(options = {}) {
             console.error('[prepareReplyMarkup] Error parsing reply_markup:', error);
         }
     }
-    // Fallback: return the default reply keyboard
     const replyKeyboard = {
         keyboard: [
             ['🍞 Каталог', '📋 Заказы'],
@@ -61,6 +73,9 @@ function prepareReplyMarkup(options = {}) {
     return replyKeyboard;
 }
 
+/**
+ * Sends a message to a chat and deletes the last sent message (if exists).
+ */
 async function sendMessageWithDelete(chatId, text, options = {}) {
     try {
         if (lastBotMessages[chatId]) {
@@ -87,6 +102,9 @@ async function sendMessageWithDelete(chatId, text, options = {}) {
     }
 }
 
+/**
+ * Sends a photo to a chat and deletes the last sent message (if exists).
+ */
 async function sendPhotoWithDelete(chatId, photo, options = {}) {
     try {
         if (lastBotMessages[chatId]) {
@@ -230,9 +248,9 @@ bot.on('callback_query', async (callbackQuery) => {
         if (order.deliveryInfo && order.deliveryInfo.deliveryInstructions) {
             detailsText += `\nИнструкция по доставке: ${order.deliveryInfo.deliveryInstructions}\n`;
         }
-        // Если заказ отображается из "Мои заказы", показываем кнопки для изменения статуса
+        // For "My orders" show only status update buttons.
+        // For regular orders, include a "Cancel Order" button.
         if (userState[chatId] && userState[chatId].orderListType === 'my_orders') {
-            // Список статусов (отображаем пользователю понятные названия)
             const statuses = [
                 'Новый',
                 'Принят в работу',
@@ -244,30 +262,24 @@ bot.on('callback_query', async (callbackQuery) => {
                 'Отменён',
                 'Возврат'
             ];
-            // Формируем строки кнопок по 3 на строку, используя статусное сопоставление для callback_data
             const inlineStatusButtons = [];
             for (let i = 0; i < statuses.length; i += 3) {
                 const row = statuses.slice(i, i + 3).map(status => {
                     const shortStatus = statusMap[status] || status;
                     const callbackData = `update_status::${order._id}::${shortStatus}`;
                     console.log(`[Status Button] Generated callback_data: "${callbackData}", length: ${callbackData.length}, byte length: ${getByteLength(callbackData)}`);
-                    return {
-                        text: status,
-                        callback_data: callbackData
-                    };
+                    return { text: status, callback_data: callbackData };
                 });
                 inlineStatusButtons.push(row);
             }
-            // Добавляем строку с кнопкой "⬅️ Назад"
             inlineStatusButtons.push([{ text: '⬅️ Назад', callback_data: 'my_orders' }]);
-            const inlineKeyboard = {
-                inline_keyboard: inlineStatusButtons
-            };
+            const inlineKeyboard = { inline_keyboard: inlineStatusButtons };
             await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
         } else {
-            // Если заказ не из "Мои заказы", просто кнопка "⬅️ Назад"
+            // Regular orders: add "Cancel Order" and "⬅️ Back" buttons.
             const inlineKeyboard = {
                 inline_keyboard: [
+                    [{ text: 'Отменить заказ', callback_data: `cancel_order_${order._id}` }],
                     [{ text: '⬅️ Назад', callback_data: 'orders_list' }]
                 ]
             };
@@ -275,11 +287,10 @@ bot.on('callback_query', async (callbackQuery) => {
         }
     }
     else if (data.startsWith('update_status::')) {
-        // Формат: update_status::<order_id>::<newStatus>
+        // Format: update_status::<order_id>::<newStatus>
         const parts = data.split("::");
         if (parts.length >= 3) {
             const orderId = parts[1];
-            // Получаем короткий статус и делаем обратное сопоставление для передачи пользователю
             const newStatusCode = parts.slice(2).join("::");
             const userFriendlyStatus = Object.keys(statusMap).find(key => statusMap[key] === newStatusCode) || newStatusCode;
             console.log(`[Status Update] Updating order ${orderId} to status "${userFriendlyStatus}" (code: ${newStatusCode})`);
@@ -287,6 +298,19 @@ bot.on('callback_query', async (callbackQuery) => {
                 const updateResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, { status: userFriendlyStatus });
                 console.log(`[Status Update] Response:`, updateResponse.data);
                 await sendMessageWithDelete(chatId, `Статус заказа ${orderId} изменен на "${userFriendlyStatus}"`);
+
+                // Always send notification to the order creator using clientId, even if the updater is also the creator.
+                const orderResponse = await axios.get(`http://api:5000/api/orders/${orderId}`);
+                const order = orderResponse.data.order || orderResponse.data;
+                if (order.clientId) {
+                    const notificationText = `Ваш заказ №${order._id} обновлен.\nНовый статус: ${userFriendlyStatus}`;
+                    try {
+                        await bot.sendMessage(order.clientId, notificationText);
+                        console.log(`Уведомление отправлено пользователю с clientId ${order.clientId}`);
+                    } catch (notificationError) {
+                        console.error(`Ошибка отправки уведомления пользователю с clientId ${order.clientId}:`, notificationError.message);
+                    }
+                }
             } catch (error) {
                 console.error(`[Status Update] Error updating order ${orderId}:`, error.message);
                 await sendMessageWithDelete(chatId, `Ошибка обновления статуса заказа ${orderId}`);
@@ -303,7 +327,6 @@ bot.on('callback_query', async (callbackQuery) => {
         const orderId = data.split('_')[2];
         console.log(`[Order Cancel] Received request to cancel order with id: ${orderId}`);
         try {
-            console.log(`[Order Cancel] Sending API request to cancel order ${orderId}`);
             const cancelResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, { status: 'Отменён' });
             console.log(`[Order Cancel] Response from API:`, cancelResponse.data);
             await sendMessageWithDelete(chatId, `Заказ ${orderId} успешно отменён! ❌`);
@@ -314,10 +337,8 @@ bot.on('callback_query', async (callbackQuery) => {
     }
     else if (data === 'view_products') {
         try {
-            console.log('Fetching products from API');
             const response = await axios.get('http://api:5000/api/products');
             const products = response.data;
-            console.log('Products:', products);
             if (products.length === 0) {
                 await sendMessageWithDelete(chatId, 'В данный момент продукты недоступны.');
                 return;
@@ -327,9 +348,7 @@ bot.on('callback_query', async (callbackQuery) => {
             });
             productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
             userState[chatId] = { step: 'select_product', products };
-            await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', {
-                reply_markup: JSON.stringify({ inline_keyboard: productButtons }),
-            });
+            await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
         } catch (error) {
             console.error('Error fetching products:', error);
             await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка продуктов.');
@@ -370,9 +389,7 @@ bot.on('callback_query', async (callbackQuery) => {
         });
         productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
         userState[chatId].step = 'select_product';
-        await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', {
-            reply_markup: JSON.stringify({ inline_keyboard: productButtons }),
-        });
+        await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
     }
     else if (data === 'back_to_main') {
         userState[chatId] = { step: 'main_menu' };
@@ -398,20 +415,15 @@ async function displayOrdersList(chatId) {
     try {
         const response = await axios.get(ordersUrl);
         let orders = [];
-        if (Array.isArray(response.data)) {
-            orders = response.data;
-        } else if (response.data.orders) {
-            orders = response.data.orders;
-        }
+        if (Array.isArray(response.data)) orders = response.data;
+        else if (response.data.orders) orders = response.data.orders;
         if (orders.length === 0) {
             await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
             return;
         }
-        // Ensure userState[chatId] exists
         userState[chatId] = userState[chatId] || {};
         userState[chatId].orderListType = 'all';
         console.log('[Orders List] Returned orders:', JSON.stringify(orders, null, 2));
-        // Build inline keyboard with orders and a "Back" button.
         const inlineKeyboard = orders.map(order => {
             const orderIdShort = order._id.slice(-4);
             return [{
@@ -428,25 +440,21 @@ async function displayOrdersList(chatId) {
     }
 }
 
-// Function to display "my orders", i.e. orders that include at least one product
-// with chefId equal to the current chatId. Sets orderListType to "my_orders"
+// Function to display "my orders" (orders with at least one product where chefId equals current chatId).
+// Sets orderListType to "my_orders"
 async function displayMyOrders(chatId) {
     const ordersUrl = `http://api:5000/api/orders/client/${chatId}`;
     console.log(`[My Orders] Requesting orders from URL: ${ordersUrl}`);
     try {
         const response = await axios.get(ordersUrl);
         let orders = [];
-        if (Array.isArray(response.data)) {
-            orders = response.data;
-        } else if (response.data.orders) {
-            orders = response.data.orders;
-        }
+        if (Array.isArray(response.data)) orders = response.data;
+        else if (response.data.orders) orders = response.data.orders;
         if (orders.length === 0) {
             await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
             return;
         }
         const filteredOrders = [];
-        // For each order, check if at least one product has chefId equal to current chatId.
         for (const order of orders) {
             const productDetailsPromises = order.products.map(prod =>
                 axios.get(`http://api:5000/api/products/${prod.productId}`)
@@ -455,19 +463,15 @@ async function displayMyOrders(chatId) {
             );
             const productDetails = await Promise.all(productDetailsPromises);
             const hasMatchingProduct = productDetails.some(prod => prod && prod.chefId && prod.chefId.toString() === chatId.toString());
-            if (hasMatchingProduct) {
-                filteredOrders.push(order);
-            }
+            if (hasMatchingProduct) filteredOrders.push(order);
         }
         if (filteredOrders.length === 0) {
             await sendMessageWithDelete(chatId, 'У вас пока нет заказов с продуктами, привязанными к вам.');
             return;
         }
-        // Ensure userState[chatId] exists
         userState[chatId] = userState[chatId] || {};
         userState[chatId].orderListType = 'my_orders';
         console.log('[My Orders] Filtered orders:', JSON.stringify(filteredOrders, null, 2));
-        // Build inline keyboard for filtered orders
         const inlineKeyboard = filteredOrders.map(order => {
             const orderIdShort = order._id.slice(-4);
             return [{
@@ -574,7 +578,6 @@ bot.on('message', async (msg) => {
             const form = new FormData();
             form.append('image', buffer, { filename: filename, contentType: 'image/jpeg' });
             const imageResponse = await axios.post('http://api:5000/api/images/upload', form, { headers: form.getHeaders() });
-            // Assign chefId using clientId (chatId)
             const newProduct = {
                 name: userState[chatId].productName,
                 description: userState[chatId].productDescription,
