@@ -1,6 +1,6 @@
 /**
  * Telegram Bot for E-commerce
- * @lastModified 2025-02-23 03:45:00 UTC
+ * @lastModified 2025-02-23 03:55:00 UTC
  * @user maxwebgt
  */
 
@@ -26,6 +26,7 @@ const lastBotMessages = {};
 
 function prepareReplyMarkup(options = {}) {
     console.log('[prepareReplyMarkup] Incoming options:', options);
+    // We check for inline_keyboard; if provided, we return it accordingly.
     if (options.reply_markup) {
         try {
             const markup = typeof options.reply_markup === 'string'
@@ -40,6 +41,7 @@ function prepareReplyMarkup(options = {}) {
             console.error('[prepareReplyMarkup] Error parsing reply_markup:', error);
         }
     }
+    // Fallback: return the default reply keyboard
     const replyKeyboard = {
         keyboard: [
             ['🍞 Каталог', '📋 Заказы'],
@@ -115,7 +117,6 @@ const mainMenu = {
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     console.log(`[onText /start] Received /start from chat ${chatId}`);
-
     const telegramLogin = msg.from.username || '';
     if (!telegramLogin) {
         console.error(`[onText /start] Telegram login is missing for chat ${chatId}. Cannot create user.`);
@@ -165,7 +166,6 @@ bot.on('callback_query', async (callbackQuery) => {
         }
         const order = orderDetails.order || orderDetails;
         console.log('[Order View] Using order object:', order);
-        // Build extended details text with more information about the order:
         let detailsText = `Заказ №${order._id}\n`;
         detailsText += `Статус: ${order.status}\n`;
         detailsText += `Сумма: ${order.totalAmount} ₽\n`;
@@ -181,9 +181,8 @@ bot.on('callback_query', async (callbackQuery) => {
         }
         if (order.products && order.products.length > 0) {
             detailsText += `\nСостав заказа:\n`;
-            // For each order product, fetch product details using productId from API /api/products/{id}
             try {
-                // Map each product to a promise which fetches its details.
+                // For each product in the order, fetch product details by productId
                 const productPromises = order.products.map(prod =>
                     axios.get(`http://api:5000/api/products/${prod.productId}`)
                         .then(res => ({
@@ -325,6 +324,7 @@ async function displayOrdersList(chatId) {
             return;
         }
         console.log('[Orders List] Returned orders:', JSON.stringify(orders, null, 2));
+        // Build inline keyboard with each order and add an extra row with a "Back" button.
         const inlineKeyboard = orders.map(order => {
             const orderIdShort = order._id.slice(-4);
             return [{
@@ -332,6 +332,8 @@ async function displayOrdersList(chatId) {
                 callback_data: `view_order_${order._id}`
             }];
         });
+        // Append an extra row with a "back" button
+        inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
         const keyboardOptions = { inline_keyboard: inlineKeyboard };
         await sendMessageWithDelete(chatId, 'Ваши заказы:', { reply_markup: JSON.stringify(keyboardOptions) });
     } catch (error) {
