@@ -1,33 +1,92 @@
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
+
+// Логгер для модели
+const log = (message, data = null) => {
+    const timestamp = new Date().toISOString();
+    console.log(`${timestamp} [UserModel] ${message}`,
+        data ? JSON.stringify(data, null, 2) : '');
+};
 
 const userSchema = new mongoose.Schema({
-    telegramId: { type: String }, // Уникальный идентификатор в Telegram, не обязательный и не уникальный
-    firstName: String,  // Имя пользователя
-    lastName: String,   // Фамилия пользователя
-    username: String,   // Логин пользователя в Telegram
-    email: { type: String },  // Электронная почта пользователя (не обязательная и не уникальная)
-    password: { type: String },  // Хэшированный пароль пользователя
-    role: {
+    telegramId: {
         type: String,
-        enum: ['client', 'chef', 'moderator'],
-        default: 'client'  // Роль по умолчанию
+        sparse: true,
+        index: true
+    },
+    chatId: {
+        type: String,
+        sparse: true,
+        index: true
+    },
+    username: {
+        type: String,
+        sparse: true,
+        index: true
+    },
+    lastLoginAt: {
+        type: Date,
+        default: Date.now
+    },
+    isActive: {
+        type: Boolean,
+        default: true
     }
+}, {
+    timestamps: true,
+    strict: true
 });
 
-// Хэшируем пароль перед сохранением пользователя, только если он был изменен и существует.
-userSchema.pre('save', async function(next) {
-    if (this.isModified('password') && this.password) {
-        const salt = await bcrypt.genSalt(10);
-        this.password = await bcrypt.hash(this.password, salt);
-    }
+// Добавляем составной индекс для оптимизации поиска
+userSchema.index({ telegramId: 1, chatId: 1 }, { sparse: true });
+
+// Middleware перед сохранением
+userSchema.pre('save', function(next) {
+    log('Pre save middleware', {
+        _id: this._id,
+        telegramId: this.telegramId,
+        chatId: this.chatId,
+        username: this.username
+    });
     next();
 });
 
-// Метод для проверки пароля
-userSchema.methods.isValidPassword = async function(password) {
-    return await bcrypt.compare(password, this.password);
+// Виртуальное поле для полного имени
+userSchema.virtual('displayName').get(function() {
+    return this.username || this.telegramId || this.chatId || 'Неизвестный пользователь';
+});
+
+// Методы экземпляра
+userSchema.methods.toPublicJSON = function() {
+    return {
+        id: this._id,
+        telegramId: this.telegramId,
+        chatId: this.chatId,
+        username: this.username,
+        displayName: this.displayName,
+        isActive: this.isActive,
+        lastLoginAt: this.lastLoginAt
+    };
+};
+
+// Статические методы
+userSchema.statics.findByAnyId = async function(id) {
+    log('findByAnyId', { searchId: id });
+    return this.findOne({
+        $or: [
+            { telegramId: id },
+            { chatId: String(id) },
+            { username: id }
+        ]
+    });
 };
 
 const User = mongoose.model('User', userSchema);
+
+// Логируем инициализацию модели
+log('Model initialized', {
+    modelName: User.modelName,
+    collectionName: User.collection.collectionName,
+    indexes: userSchema.indexes()
+});
+
 module.exports = User;

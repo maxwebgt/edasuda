@@ -2,129 +2,116 @@ const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
 
+// Логгер для маршрутов
+const log = (method, path, data = null) => {
+    const timestamp = new Date().toISOString();
+    console.log(`${timestamp} [UserRoutes:${method}] ${path}`,
+        data ? JSON.stringify(data, null, 2) : '');
+};
+
+// Middleware для обработки ошибок
+const errorHandler = (res, error, method) => {
+    log(method, 'Error', {
+        message: error.message,
+        stack: error.stack
+    });
+    res.status(500).json({
+        success: false,
+        message: 'Внутренняя ошибка сервера',
+        error: error.message
+    });
+};
+
 // Получение всех пользователей
-/**
- * @swagger
- * /api/users:
- *   get:
- *     summary: Получение всех пользователей
- *     tags: [Users]
- *     responses:
- *       200:
- *         description: Список всех пользователей
- *       500:
- *         description: Ошибка при получении пользователей
- */
-router.get('/', userController.getAllUsers);
+router.get('/', async (req, res) => {
+    try {
+        log('GET', '/', { query: req.query });
+        const users = await userController.getAllUsers();
+        res.json({ success: true, data: users });
+    } catch (error) {
+        errorHandler(res, error, 'GET /');
+    }
+});
 
-// Создание нового пользователя
-/**
- * @swagger
- * /api/users:
- *   post:
- *     summary: Создание нового пользователя
- *     tags: [Users]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               name:
- *                 type: string
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *               role:
- *                 type: string
- *               telegramId:
- *                 type: string
- *     responses:
- *       201:
- *         description: Пользователь успешно создан
- *       500:
- *         description: Ошибка при создании пользователя
- */
-router.post('/', userController.createUser);
+// Поиск пользователя по ID
+router.get('/:id', async (req, res) => {
+    try {
+        log('GET', '/:id', { params: req.params });
+        const user = await userController.findUserForOrder(req.params.id);
 
-// Получение пользователя по ID
-/**
- * @swagger
- * /api/users/{id}:
- *   get:
- *     summary: Получение пользователя по ID
- *     tags: [Users]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: ID пользователя
- *     responses:
- *       200:
- *         description: Пользователь найден
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 name:
- *                   type: string
- *                 email:
- *                   type: string
- *                 role:
- *                   type: string
- *                 telegramId:
- *                   type: string
- *       404:
- *         description: Пользователь не найден
- *       500:
- *         description: Ошибка при получении пользователя
- */
-router.get('/:id', userController.getUserById);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Пользователь не найден'
+            });
+        }
+
+        res.json({ success: true, data: user.toPublicJSON() });
+    } catch (error) {
+        errorHandler(res, error, 'GET /:id');
+    }
+});
+
+// Создание или обновление пользователя из Telegram
+router.post('/telegram', async (req, res) => {
+    try {
+        log('POST', '/telegram', { body: req.body });
+        const user = await userController.findOrCreateUser(req.body);
+        res.status(201).json({ success: true, data: user.toPublicJSON() });
+    } catch (error) {
+        errorHandler(res, error, 'POST /telegram');
+    }
+});
 
 // Обновление пользователя
-/**
- * @swagger
- * /api/users/{id}:
- *   put:
- *     summary: Обновление информации о пользователе
- *     tags: [Users]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: ID пользователя
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               name:
- *                 type: string
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *               role:
- *                 type: string
- *               telegramId:
- *                 type: string
- *     responses:
- *       200:
- *         description: Пользователь успешно обновлен
- *       404:
- *         description: Пользователь не найден
- *       500:
- *         description: Ошибка при обновлении пользователя
- */
-router.put('/:id', userController.updateUser);
+router.put('/:id', async (req, res) => {
+    try {
+        log('PUT', '/:id', {
+            params: req.params,
+            body: req.body
+        });
+
+        const user = await userController.updateUser(req.params.id, req.body);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Пользователь не найден'
+            });
+        }
+
+        res.json({ success: true, data: user.toPublicJSON() });
+    } catch (error) {
+        errorHandler(res, error, 'PUT /:id');
+    }
+});
+
+// Деактивация пользователя
+router.delete('/:id', async (req, res) => {
+    try {
+        log('DELETE', '/:id', { params: req.params });
+        const user = await userController.deactivateUser(req.params.id);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Пользователь не найден'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Пользователь деактивирован',
+            data: user.toPublicJSON()
+        });
+    } catch (error) {
+        errorHandler(res, error, 'DELETE /:id');
+    }
+});
+
+// Логируем доступные методы при инициализации
+log('INIT', 'Available controller methods', {
+    methods: Object.keys(userController)
+});
 
 module.exports = router;

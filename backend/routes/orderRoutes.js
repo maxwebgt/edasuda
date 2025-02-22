@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const orderController = require('../controllers/orderController');
 
-// Получение всех заказов
 /**
  * @swagger
  * /api/orders:
@@ -17,7 +16,6 @@ const orderController = require('../controllers/orderController');
  */
 router.get('/', orderController.getAllOrders);
 
-// Создание нового заказа
 /**
  * @swagger
  * /api/orders:
@@ -33,9 +31,10 @@ router.get('/', orderController.getAllOrders);
  *             properties:
  *               clientId:
  *                 type: string
- *               description:
+ *                 description: ID клиента (если известен)
+ *               telegramId:
  *                 type: string
- *                 description: Описание заказа
+ *                 description: Telegram ID клиента для поиска соответствующего пользователя (используется, если clientId не передан)
  *               products:
  *                 type: array
  *                 items:
@@ -45,36 +44,36 @@ router.get('/', orderController.getAllOrders);
  *                       type: string
  *                     quantity:
  *                       type: number
+ *                 description: Список продуктов заказа
  *               status:
  *                 type: string
- *                 default: 'В процессе'
  *               totalAmount:
  *                 type: number
  *               paymentStatus:
  *                 type: string
- *                 enum: ['Оплачено', 'Не оплачено', 'В процессе']
- *                 default: 'Не оплачено'
+ *                 enum: [Оплачено, Не оплачено, В процессе]
  *               paymentMethod:
  *                 type: string
- *                 enum: ['Наличные', 'Карта', 'Онлайн']
- *                 default: 'Наличные'
+ *                 enum: [Наличные, Карта, Онлайн]
  *               shippingAddress:
  *                 type: string
  *               contactEmail:
  *                 type: string
  *               contactPhone:
  *                 type: string
+ *               description:
+ *                 type: string
+ *                 description: Дополнительное описание заказа
  *     responses:
  *       201:
  *         description: Заказ успешно создан
  *       400:
- *         description: Неверный статус оплаты или метод оплаты
+ *         description: Ошибка валидации входных данных
  *       500:
  *         description: Ошибка при создании заказа
  */
 router.post('/', orderController.createOrder);
 
-// Получение заказа по ID
 /**
  * @swagger
  * /api/orders/{id}:
@@ -98,12 +97,34 @@ router.post('/', orderController.createOrder);
  */
 router.get('/:id', orderController.getOrderById);
 
-// Обновление заказа
+/**
+ * @swagger
+ * /api/orders/client/{clientId}:
+ *   get:
+ *     summary: Получение заказов клиента по Telegram ID
+ *     tags: [Orders]
+ *     parameters:
+ *       - in: path
+ *         name: clientId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Telegram ID клиента
+ *     responses:
+ *       200:
+ *         description: Список заказов клиента
+ *       404:
+ *         description: Пользователь не найден
+ *       500:
+ *         description: Ошибка при получении заказов клиента
+ */
+router.get('/client/:clientId', orderController.getClientOrders);
+
 /**
  * @swagger
  * /api/orders/{id}:
  *   put:
- *     summary: Обновление информации о заказе
+ *     summary: Обновление заказа
  *     tags: [Orders]
  *     parameters:
  *       - in: path
@@ -121,9 +142,6 @@ router.get('/:id', orderController.getOrderById);
  *             properties:
  *               clientId:
  *                 type: string
- *               description:
- *                 type: string
- *                 description: Описание заказа
  *               products:
  *                 type: array
  *                 items:
@@ -139,26 +157,51 @@ router.get('/:id', orderController.getOrderById);
  *                 type: number
  *               paymentStatus:
  *                 type: string
- *                 enum: ['Оплачено', 'Не оплачено', 'В процессе']
+ *                 enum: [Оплачено, Не оплачено, В процессе]
  *               paymentMethod:
  *                 type: string
- *                 enum: ['Наличные', 'Карта', 'Онлайн']
+ *                 enum: [Наличные, Карта, Онлайн]
  *               shippingAddress:
  *                 type: string
  *               contactEmail:
  *                 type: string
  *               contactPhone:
  *                 type: string
+ *               description:
+ *                 type: string
  *     responses:
  *       200:
  *         description: Заказ успешно обновлен
- *       400:
- *         description: Неверный статус оплаты или метод оплаты
  *       404:
  *         description: Заказ не найден
+ *       400:
+ *         description: Ошибка валидации входных данных
  *       500:
  *         description: Ошибка при обновлении заказа
  */
 router.put('/:id', orderController.updateOrder);
+
+/**
+ * @swagger
+ * /api/orders/{id}:
+ *   delete:
+ *     summary: Удаление заказа
+ *     tags: [Orders]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID заказа
+ *     responses:
+ *       200:
+ *         description: Заказ успешно удален
+ *       404:
+ *         description: Заказ не найден
+ *       500:
+ *         description: Ошибка при удалении заказа
+ */
+router.delete('/:id', orderController.deleteOrder);
 
 module.exports = router;

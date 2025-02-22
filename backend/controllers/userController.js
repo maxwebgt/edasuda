@@ -1,77 +1,179 @@
+const mongoose = require('mongoose');
 const User = require('../models/userModel');
 
+// Логгер для контроллера
+const log = (method, message, data = null) => {
+    const timestamp = new Date().toISOString();
+    console.log(`${timestamp} [UserController:${method}] ${message}`,
+        data ? JSON.stringify(data, null, 2) : '');
+};
+
 // Получение всех пользователей
-exports.getAllUsers = async (req, res) => {
+exports.getAllUsers = async () => {
+    log('getAllUsers', 'Request received');
     try {
-        const users = await User.find();
-        res.json(users);
+        const users = await User.find({ isActive: true });
+        log('getAllUsers', `Found ${users.length} users`);
+        return users.map(user => user.toPublicJSON());
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Ошибка при получении пользователей' });
+        log('getAllUsers', 'Error occurred', { error: error.message });
+        throw error;
     }
 };
 
-// Создание нового пользователя
-exports.createUser = async (req, res) => {
-    const { name, email, password, role, telegramId } = req.body;
+// Поиск или создание пользователя при входе в бот
+exports.findOrCreateUser = async (telegramData) => {
+    log('findOrCreateUser', 'Starting', {
+        username: telegramData.username,
+        chatId: telegramData.id,
+        rawData: telegramData
+    });
 
     try {
-        const newUser = new User({
-            name,
-            email,
-            password,  // Пароль будет захеширован автоматически
-            role,
-            telegramId,
-        });
+        // Поиск существующего пользователя
+        let user = await User.findByAnyId(telegramData.username) ||
+            await User.findByAnyId(telegramData.id);
 
-        await newUser.save();
-        res.status(201).json(newUser);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Ошибка при создании пользователя' });
-    }
-};
+        if (user) {
+            log('findOrCreateUser', 'Existing user found', user.toPublicJSON());
 
-// Получение пользователя по ID
-exports.getUserById = async (req, res) => {
-    const { id } = req.params;
+            // Проверяем необходимость обновления данных
+            const updates = {};
+            if (!user.chatId || user.chatId !== String(telegramData.id)) {
+                updates.chatId = String(telegramData.id);
+            }
+            if (!user.telegramId && telegramData.username) {
+                updates.telegramId = telegramData.username;
+            }
+            if (!user.username && telegramData.username) {
+                updates.username = telegramData.username;
+            }
+            updates.lastLoginAt = new Date();
+            updates.isActive = true;
 
-    try {
-        const user = await User.findById(id);
+            if (Object.keys(updates).length > 0) {
+                log('findOrCreateUser', 'Updating user data', updates);
+                user = await User.findByIdAndUpdate(
+                    user._id,
+                    { $set: updates },
+                    { new: true }
+                );
+                log('findOrCreateUser', 'User updated', user.toPublicJSON());
+            }
+        } else {
+            // Создание нового пользователя
+            log('findOrCreateUser', 'Creating new user', {
+                telegramId: telegramData.username,
+                chatId: String(telegramData.id)
+            });
 
-        if (!user) {
-            return res.status(404).json({ message: 'Пользователь не найден' });
+            user = new User({
+                telegramId: telegramData.username,
+                chatId: String(telegramData.id),
+                username: telegramData.username,
+                lastLoginAt: new Date(),
+                isActive: true
+            });
+
+            await user.save();
+            log('findOrCreateUser', 'New user created', user.toPublicJSON());
         }
 
-        res.json(user);
+        return user;
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Ошибка при получении пользователя' });
+        log('findOrCreateUser', 'Error occurred', {
+            error: error.message,
+            stack: error.stack
+        });
+        throw error;
+    }
+};
+
+// Поиск пользователя для создания заказа
+exports.findUserForOrder = async (clientId) => {
+    log('findUserForOrder', 'Starting search', {
+        clientId,
+        clientIdType: typeof clientId
+    });
+
+    try {
+        const user = await User.findByAnyId(clientId);
+
+        if (user) {
+            log('findUserForOrder', 'User found', user.toPublicJSON());
+
+            // Проверяем активность пользователя
+            if (!user.isActive) {
+                log('findUserForOrder', 'User is inactive');
+                throw new Error('Пользователь неактивен');
+            }
+        } else {
+            log('findUserForOrder', 'User not found');
+        }
+
+        return user;
+    } catch (error) {
+        log('findUserForOrder', 'Error occurred', {
+            error: error.message,
+            stack: error.stack
+        });
+        throw error;
     }
 };
 
 // Обновление пользователя
-exports.updateUser = async (req, res) => {
-    const { id } = req.params;
-    const { name, email, password, role, telegramId } = req.body;
+exports.updateUser = async (userId, updateData) => {
+    log('updateUser', 'Starting update', {
+        userId,
+        updateData
+    });
 
     try {
-        const user = await User.findById(id);
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $set: updateData },
+            { new: true, runValidators: true }
+        );
 
         if (!user) {
-            return res.status(404).json({ message: 'Пользователь не найден' });
+            log('updateUser', 'User not found');
+            return null;
         }
 
-        user.name = name || user.name;
-        user.email = email || user.email;
-        user.password = password || user.password;  // Пароль будет захеширован        автоматически
-        user.role = role || user.role;
-        user.telegramId = telegramId || user.telegramId;
-
-        await user.save();
-        res.json(user);
+        log('updateUser', 'User updated', user.toPublicJSON());
+        return user;
     } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Ошибка при обновлении пользователя' });
+        log('updateUser', 'Error occurred', {
+            error: error.message,
+            stack: error.stack
+        });
+        throw error;
+    }
+};
+
+// Деактивация пользователя
+exports.deactivateUser = async (userId) => {
+    log('deactivateUser', 'Starting deactivation', { userId });
+
+    try {
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $set: { isActive: false } },
+            { new: true }
+        );
+
+        if (!user) {
+            log('deactivateUser', 'User not found');
+            return null;
+        }
+
+        log('deactivateUser', 'User deactivated', user.toPublicJSON());
+        return user;
+    } catch (error) {
+        log('deactivateUser', 'Error occurred', {
+            error: error.message,
+            stack: error.stack
+        });
+        throw error;
     }
 };
