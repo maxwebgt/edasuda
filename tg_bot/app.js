@@ -1,6 +1,6 @@
 /**
  * Telegram Bot for E-commerce
- * @lastModified 2025-02-23 06:57:26 UTC
+ * @lastModified 2025-02-23 07:15:00 UTC
  * @user maxwebgt
  *
  * This solution notifies the user who placed an order about any status changes.
@@ -11,6 +11,10 @@
  *
  * Change: For "regular orders" (i.e. not "My orders") the additional information view includes
  * a "Cancel Order" button.
+ *
+ * New Functionality: When a client cancels an order (via the "cancel_order" button) the bot
+ * will additionally notify all chefs associated with the products in that order. For each product,
+ * the chefId is used as the chat id to send a notification.
  */
 
 require('dotenv').config();
@@ -48,10 +52,9 @@ function prepareReplyMarkup(options = {}) {
     console.log('[prepareReplyMarkup] Incoming options:', options);
     if (options.reply_markup) {
         try {
-            const markup =
-                typeof options.reply_markup === 'string'
-                    ? JSON.parse(options.reply_markup)
-                    : options.reply_markup;
+            const markup = typeof options.reply_markup === 'string'
+                ? JSON.parse(options.reply_markup)
+                : options.reply_markup;
             console.log('[prepareReplyMarkup] Parsed markup:', markup);
             if (markup.inline_keyboard) {
                 console.log('[prepareReplyMarkup] Detected inline_keyboard. Returning inline markup.');
@@ -292,14 +295,15 @@ bot.on('callback_query', async (callbackQuery) => {
         if (parts.length >= 3) {
             const orderId = parts[1];
             const newStatusCode = parts.slice(2).join("::");
-            const userFriendlyStatus = Object.keys(statusMap).find(key => statusMap[key] === newStatusCode) || newStatusCode;
+            const userFriendlyStatus = Object.keys(statusMap)
+                .find(key => statusMap[key] === newStatusCode) || newStatusCode;
             console.log(`[Status Update] Updating order ${orderId} to status "${userFriendlyStatus}" (code: ${newStatusCode})`);
             try {
                 const updateResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, { status: userFriendlyStatus });
                 console.log(`[Status Update] Response:`, updateResponse.data);
                 await sendMessageWithDelete(chatId, `Статус заказа ${orderId} изменен на "${userFriendlyStatus}"`);
 
-                // Always send notification to the order creator using clientId, even if the updater is also the creator.
+                // Always send notification to the order creator using clientId.
                 const orderResponse = await axios.get(`http://api:5000/api/orders/${orderId}`);
                 const order = orderResponse.data.order || orderResponse.data;
                 if (order.clientId) {
@@ -311,6 +315,29 @@ bot.on('callback_query', async (callbackQuery) => {
                         console.error(`Ошибка отправки уведомления пользователю с clientId ${order.clientId}:`, notificationError.message);
                     }
                 }
+
+                // New functionality: if the order is cancelled ("Отменён"), notify all chefs associated with the order's products.
+                if (userFriendlyStatus === 'Отменён') {
+                    const productNotifications = order.products.map(async (prod) => {
+                        try {
+                            const prodRes = await axios.get(`http://api:5000/api/products/${prod.productId}`);
+                            const productData = prodRes.data;
+                            if (productData.chefId) {
+                                const chefNotification = `Заказ №${order._id} был отменён. Пожалуйста, проверьте информацию по вашему продукту.`;
+                                try {
+                                    await bot.sendMessage(productData.chefId, chefNotification);
+                                    console.log(`Уведомление отправлено повару с chefId ${productData.chefId}`);
+                                } catch (e) {
+                                    console.error(`Ошибка отправки уведомления повару с chefId ${productData.chefId}:`, e.message);
+                                }
+                            }
+                        } catch (err) {
+                            console.error('Error fetching product details for notifications:', err.message);
+                        }
+                    });
+                    await Promise.all(productNotifications);
+                }
+
             } catch (error) {
                 console.error(`[Status Update] Error updating order ${orderId}:`, error.message);
                 await sendMessageWithDelete(chatId, `Ошибка обновления статуса заказа ${orderId}`);
@@ -407,6 +434,7 @@ bot.on('callback_query', async (callbackQuery) => {
         await sendMessageWithDelete(chatId, 'Вот что можно сделать:\n1. Просмотреть продукты\n2. Оформить заказ\n3. Добавить продукт');
     }
 });
+
 
 // Function to display all orders (non-filtered). Sets orderListType to "all"
 async function displayOrdersList(chatId) {
