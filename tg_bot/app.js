@@ -1,6 +1,6 @@
 /**
  * Telegram Bot for E-commerce
- * @lastModified 2025-02-23 03:55:00 UTC
+ * @lastModified 2025-02-23 04:10:00 UTC
  * @user maxwebgt
  */
 
@@ -182,7 +182,7 @@ bot.on('callback_query', async (callbackQuery) => {
         if (order.products && order.products.length > 0) {
             detailsText += `\nСостав заказа:\n`;
             try {
-                // For each product in the order, fetch product details by productId
+                // For each product in the order, fetch product details by productId.
                 const productPromises = order.products.map(prod =>
                     axios.get(`http://api:5000/api/products/${prod.productId}`)
                         .then(res => ({
@@ -332,7 +332,6 @@ async function displayOrdersList(chatId) {
                 callback_data: `view_order_${order._id}`
             }];
         });
-        // Append an extra row with a "back" button
         inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
         const keyboardOptions = { inline_keyboard: inlineKeyboard };
         await sendMessageWithDelete(chatId, 'Ваши заказы:', { reply_markup: JSON.stringify(keyboardOptions) });
@@ -431,12 +430,14 @@ bot.on('message', async (msg) => {
             const form = new FormData();
             form.append('image', buffer, { filename: filename, contentType: 'image/jpeg' });
             const imageResponse = await axios.post('http://api:5000/api/images/upload', form, { headers: form.getHeaders() });
+            // Assign chefId using clientId (chatId)
             const newProduct = {
                 name: userState[chatId].productName,
                 description: userState[chatId].productDescription,
                 price: userState[chatId].productPrice,
                 category: userState[chatId].productCategory,
                 image: imageResponse.data.image.filename,
+                chefId: chatId.toString() // Bind product to client (Telegram id)
             };
             await axios.post('http://api:5000/api/products', newProduct);
             await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен!`);
