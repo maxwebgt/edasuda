@@ -1,6 +1,6 @@
 /**
  * Telegram Bot for E-commerce
- * @lastModified 2025-02-23 04:10:00 UTC
+ * @lastModified 2025-02-23 06:55:00 UTC
  * @user maxwebgt
  */
 
@@ -24,9 +24,16 @@ const bot = new TelegramBot(token, { polling: true });
 const userState = {};
 const lastBotMessages = {};
 
+/**
+ * Helper to check byte length in UTF-8.
+ */
+function getByteLength(str) {
+    return Buffer.byteLength(str, 'utf8');
+}
+
 function prepareReplyMarkup(options = {}) {
     console.log('[prepareReplyMarkup] Incoming options:', options);
-    // We check for inline_keyboard; if provided, we return it accordingly.
+    // Check for inline_keyboard; if provided, return it accordingly.
     if (options.reply_markup) {
         try {
             const markup = typeof options.reply_markup === 'string'
@@ -114,6 +121,23 @@ const mainMenu = {
     },
 };
 
+//////////////////////
+// Status mapping //
+//////////////////////
+
+// Map user-friendly statuses to short ASCII codes to keep callback_data compact.
+const statusMap = {
+    "Новый": "new",
+    "Принят в работу": "in_work",
+    "Готовится": "in_prep",
+    "Готов к отправке": "ready",
+    "В доставке": "delivering",
+    "Доставлен": "delivered",
+    "Завершён": "done",
+    "Отменён": "cancelled",
+    "Возврат": "refund"
+};
+
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     console.log(`[onText /start] Received /start from chat ${chatId}`);
@@ -182,7 +206,6 @@ bot.on('callback_query', async (callbackQuery) => {
         if (order.products && order.products.length > 0) {
             detailsText += `\nСостав заказа:\n`;
             try {
-                // For each product in the order, fetch product details by productId.
                 const productPromises = order.products.map(prod =>
                     axios.get(`http://api:5000/api/products/${prod.productId}`)
                         .then(res => ({
@@ -207,16 +230,74 @@ bot.on('callback_query', async (callbackQuery) => {
         if (order.deliveryInfo && order.deliveryInfo.deliveryInstructions) {
             detailsText += `\nИнструкция по доставке: ${order.deliveryInfo.deliveryInstructions}\n`;
         }
-        const inlineKeyboard = {
-            inline_keyboard: [
-                [{ text: '❌ Отменить', callback_data: `cancel_order_${order._id}` }],
-                [{ text: '⬅️ Назад', callback_data: 'orders_list' }]
-            ]
-        };
-        await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
+        // Если заказ отображается из "Мои заказы", показываем кнопки для изменения статуса
+        if (userState[chatId] && userState[chatId].orderListType === 'my_orders') {
+            // Список статусов (отображаем пользователю понятные названия)
+            const statuses = [
+                'Новый',
+                'Принят в работу',
+                'Готовится',
+                'Готов к отправке',
+                'В доставке',
+                'Доставлен',
+                'Завершён',
+                'Отменён',
+                'Возврат'
+            ];
+            // Формируем строки кнопок по 3 на строку, используя статусное сопоставление для callback_data
+            const inlineStatusButtons = [];
+            for (let i = 0; i < statuses.length; i += 3) {
+                const row = statuses.slice(i, i + 3).map(status => {
+                    const shortStatus = statusMap[status] || status;
+                    const callbackData = `update_status::${order._id}::${shortStatus}`;
+                    console.log(`[Status Button] Generated callback_data: "${callbackData}", length: ${callbackData.length}, byte length: ${getByteLength(callbackData)}`);
+                    return {
+                        text: status,
+                        callback_data: callbackData
+                    };
+                });
+                inlineStatusButtons.push(row);
+            }
+            // Добавляем строку с кнопкой "⬅️ Назад"
+            inlineStatusButtons.push([{ text: '⬅️ Назад', callback_data: 'my_orders' }]);
+            const inlineKeyboard = {
+                inline_keyboard: inlineStatusButtons
+            };
+            await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
+        } else {
+            // Если заказ не из "Мои заказы", просто кнопка "⬅️ Назад"
+            const inlineKeyboard = {
+                inline_keyboard: [
+                    [{ text: '⬅️ Назад', callback_data: 'orders_list' }]
+                ]
+            };
+            await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
+        }
+    }
+    else if (data.startsWith('update_status::')) {
+        // Формат: update_status::<order_id>::<newStatus>
+        const parts = data.split("::");
+        if (parts.length >= 3) {
+            const orderId = parts[1];
+            // Получаем короткий статус и делаем обратное сопоставление для передачи пользователю
+            const newStatusCode = parts.slice(2).join("::");
+            const userFriendlyStatus = Object.keys(statusMap).find(key => statusMap[key] === newStatusCode) || newStatusCode;
+            console.log(`[Status Update] Updating order ${orderId} to status "${userFriendlyStatus}" (code: ${newStatusCode})`);
+            try {
+                const updateResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, { status: userFriendlyStatus });
+                console.log(`[Status Update] Response:`, updateResponse.data);
+                await sendMessageWithDelete(chatId, `Статус заказа ${orderId} изменен на "${userFriendlyStatus}"`);
+            } catch (error) {
+                console.error(`[Status Update] Error updating order ${orderId}:`, error.message);
+                await sendMessageWithDelete(chatId, `Ошибка обновления статуса заказа ${orderId}`);
+            }
+        }
     }
     else if (data === 'orders_list') {
         await displayOrdersList(chatId);
+    }
+    else if (data === 'my_orders') {
+        await displayMyOrders(chatId);
     }
     else if (data.startsWith('cancel_order_')) {
         const orderId = data.split('_')[2];
@@ -262,8 +343,10 @@ bot.on('callback_query', async (callbackQuery) => {
         const productActionButtons = {
             reply_markup: JSON.stringify({
                 inline_keyboard: [
-                    [{ text: '🛍 Купить', callback_data: 'buy_product' },
-                        { text: '⬅️ Назад', callback_data: 'back_to_products' }]
+                    [
+                        { text: '🛍 Купить', callback_data: 'buy_product' },
+                        { text: '⬅️ Назад', callback_data: 'back_to_products' }
+                    ]
                 ]
             }),
         };
@@ -308,6 +391,7 @@ bot.on('callback_query', async (callbackQuery) => {
     }
 });
 
+// Function to display all orders (non-filtered). Sets orderListType to "all"
 async function displayOrdersList(chatId) {
     const ordersUrl = `http://api:5000/api/orders/client/${chatId}`;
     console.log(`[Orders List] Requesting orders from URL: ${ordersUrl}`);
@@ -323,8 +407,11 @@ async function displayOrdersList(chatId) {
             await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
             return;
         }
+        // Ensure userState[chatId] exists
+        userState[chatId] = userState[chatId] || {};
+        userState[chatId].orderListType = 'all';
         console.log('[Orders List] Returned orders:', JSON.stringify(orders, null, 2));
-        // Build inline keyboard with each order and add an extra row with a "Back" button.
+        // Build inline keyboard with orders and a "Back" button.
         const inlineKeyboard = orders.map(order => {
             const orderIdShort = order._id.slice(-4);
             return [{
@@ -338,6 +425,62 @@ async function displayOrdersList(chatId) {
     } catch (error) {
         console.error('[Orders List] Error fetching orders:', error.message);
         await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка заказов.');
+    }
+}
+
+// Function to display "my orders", i.e. orders that include at least one product
+// with chefId equal to the current chatId. Sets orderListType to "my_orders"
+async function displayMyOrders(chatId) {
+    const ordersUrl = `http://api:5000/api/orders/client/${chatId}`;
+    console.log(`[My Orders] Requesting orders from URL: ${ordersUrl}`);
+    try {
+        const response = await axios.get(ordersUrl);
+        let orders = [];
+        if (Array.isArray(response.data)) {
+            orders = response.data;
+        } else if (response.data.orders) {
+            orders = response.data.orders;
+        }
+        if (orders.length === 0) {
+            await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
+            return;
+        }
+        const filteredOrders = [];
+        // For each order, check if at least one product has chefId equal to current chatId.
+        for (const order of orders) {
+            const productDetailsPromises = order.products.map(prod =>
+                axios.get(`http://api:5000/api/products/${prod.productId}`)
+                    .then(res => res.data)
+                    .catch(err => null)
+            );
+            const productDetails = await Promise.all(productDetailsPromises);
+            const hasMatchingProduct = productDetails.some(prod => prod && prod.chefId && prod.chefId.toString() === chatId.toString());
+            if (hasMatchingProduct) {
+                filteredOrders.push(order);
+            }
+        }
+        if (filteredOrders.length === 0) {
+            await sendMessageWithDelete(chatId, 'У вас пока нет заказов с продуктами, привязанными к вам.');
+            return;
+        }
+        // Ensure userState[chatId] exists
+        userState[chatId] = userState[chatId] || {};
+        userState[chatId].orderListType = 'my_orders';
+        console.log('[My Orders] Filtered orders:', JSON.stringify(filteredOrders, null, 2));
+        // Build inline keyboard for filtered orders
+        const inlineKeyboard = filteredOrders.map(order => {
+            const orderIdShort = order._id.slice(-4);
+            return [{
+                text: `№${orderIdShort} • ${order.totalAmount} ₽ • ${order.status}`,
+                callback_data: `view_order_${order._id}`
+            }];
+        });
+        inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
+        const keyboardOptions = { inline_keyboard: inlineKeyboard };
+        await sendMessageWithDelete(chatId, 'Мои заказы:', { reply_markup: JSON.stringify(keyboardOptions) });
+    } catch (error) {
+        console.error('[My Orders] Error fetching orders:', error.message);
+        await sendMessageWithDelete(chatId, 'Произошла ошибка при получении вашего списка заказов.');
     }
 }
 
@@ -387,6 +530,7 @@ bot.on('message', async (msg) => {
             reply_markup: JSON.stringify({
                 inline_keyboard: [
                     [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
+                    [{ text: 'Мои заказы', callback_data: 'my_orders' }],
                     [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
                 ],
             }),
@@ -437,7 +581,7 @@ bot.on('message', async (msg) => {
                 price: userState[chatId].productPrice,
                 category: userState[chatId].productCategory,
                 image: imageResponse.data.image.filename,
-                chefId: chatId.toString() // Bind product to client (Telegram id)
+                chefId: chatId.toString()
             };
             await axios.post('http://api:5000/api/products', newProduct);
             await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен!`);
