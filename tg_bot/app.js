@@ -40,13 +40,13 @@ function prepareReplyMarkup(options = {}) {
             console.error('[prepareReplyMarkup] Error parsing reply_markup:', error);
         }
     }
-    // Keyboard layout:
-    // Row 1: "Каталог", "Заказы"
+    // Updated keyboard layout for meat products:
+    // Row 1: "🥩 Каталог" and "📋 Заказы"
     // Row 2: "⚙️ Управление"
     // Row 3: "❓ Помощь"
     const replyKeyboard = {
         keyboard: [
-            ['🛍 Каталог', '📋 Заказы'],
+            ['🥩 Каталог', '📋 Заказы'],
             ['⚙️ Управление'],
             ['❓ Помощь']
         ],
@@ -111,11 +111,11 @@ async function sendPhotoWithDelete(chatId, photo, options = {}) {
     }
 }
 
-// Main menu with bottom greeting buttons layout
+// Main menu with updated icons for meat products
 const mainMenu = {
     reply_markup: {
         keyboard: [
-            ['🛍 Каталог', '📋 Заказы'],
+            ['🥩 Каталог', '📋 Заказы'],
             ['⚙️ Управление'],
             ['❓ Помощь']
         ],
@@ -158,10 +158,10 @@ bot.onText(/\/start/, async (msg) => {
             }
         }
     }
-    // New greeting updated to "Добро пожаловать в наш магазин!" with friendly emojis.
+    // Updated greeting with meat-related emojis for a warm welcome.
     await sendMessageWithDelete(
         chatId,
-        'Добро пожаловать в наш магазин! 👋😊🌟',
+        'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲',
         mainMenu
     );
 });
@@ -244,7 +244,7 @@ bot.on('callback_query', async (callbackQuery) => {
         userState[chatId] = { step: 'main_menu' };
         await sendMessageWithDelete(
             chatId,
-            'Добро пожаловать в наш магазин! 👋😊🌟',
+            'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲',
             mainMenu
         );
     } else if (data === 'buy_product') {
@@ -267,7 +267,7 @@ bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    if (text === '🛍 Каталог') {
+    if (text === '🥩 Каталог') {
         try {
             const response = await axios.get('http://api:5000/api/products');
             const products = response.data;
@@ -358,7 +358,7 @@ bot.on('message', async (msg) => {
         await sendMessageWithDelete(
             chatId,
             'Вот что можно сделать:\n\n' +
-            '1. 🛍 Каталог - просмотр всех доступных товаров\n' +
+            '1. 🥩 Каталог - просмотр всех доступных продуктов\n' +
             '2. 📋 Заказы - просмотр ваших заказов (подробная информация и состав заказа)\n' +
             '3. ❓ Помощь - показать это сообщение\n\n' +
             'Для совершения покупки:\n' +
@@ -435,7 +435,7 @@ bot.on('message', async (msg) => {
             await axios.post('http://api:5000/api/products', newProduct);
             await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен!`);
             setTimeout(async () => {
-                await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋😊🌟', mainMenu);
+                await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
             }, 2000);
             delete userState[chatId];
         } catch (error) {
