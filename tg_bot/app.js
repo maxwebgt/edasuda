@@ -40,8 +40,16 @@ function prepareReplyMarkup(options = {}) {
             console.error('[prepareReplyMarkup] Error parsing reply_markup:', error);
         }
     }
+    // Keyboard layout:
+    // Row 1: "Каталог", "Заказы"
+    // Row 2: "⚙️ Управление"
+    // Row 3: "❓ Помощь"
     const replyKeyboard = {
-        keyboard: [['🛍 Каталог'], ['📋 Заказы'], ['❓ Помощь'], ['Управление']],
+        keyboard: [
+            ['🛍 Каталог', '📋 Заказы'],
+            ['⚙️ Управление'],
+            ['❓ Помощь']
+        ],
         resize_keyboard: true,
     };
     console.log('[prepareReplyMarkup] Returning default reply keyboard:', replyKeyboard);
@@ -103,9 +111,14 @@ async function sendPhotoWithDelete(chatId, photo, options = {}) {
     }
 }
 
+// Main menu with bottom greeting buttons layout
 const mainMenu = {
     reply_markup: {
-        keyboard: [['🛍 Каталог'], ['📋 Заказы'], ['❓ Помощь'], ['Управление']],
+        keyboard: [
+            ['🛍 Каталог', '📋 Заказы'],
+            ['⚙️ Управление'],
+            ['❓ Помощь']
+        ],
         resize_keyboard: true,
     },
 };
@@ -145,9 +158,10 @@ bot.onText(/\/start/, async (msg) => {
             }
         }
     }
+    // New greeting updated to "Добро пожаловать в наш магазин!" with friendly emojis.
     await sendMessageWithDelete(
         chatId,
-        'Добро пожаловать в наш магазин! Вот что у нас сейчас есть вкусненького:',
+        'Добро пожаловать в наш магазин! 👋😊🌟',
         mainMenu
     );
 });
@@ -158,7 +172,6 @@ bot.on('callback_query', async (callbackQuery) => {
     const data = callbackQuery.data;
     console.log(`Received callback query from ${chatId}: ${data}`);
 
-    // Реализация для кнопок view_products, product_{i}, back_to_products, buy_product и т.д.
     if (data === 'view_products') {
         try {
             console.log('Fetching products from API');
@@ -231,15 +244,16 @@ bot.on('callback_query', async (callbackQuery) => {
         userState[chatId] = { step: 'main_menu' };
         await sendMessageWithDelete(
             chatId,
-            'Добро пожаловать в наш магазин! Вот что у нас сейчас есть вкусненького:',
+            'Добро пожаловать в наш магазин! 👋😊🌟',
             mainMenu
         );
     } else if (data === 'buy_product') {
         userState[chatId].step = 'enter_quantity';
         await sendMessageWithDelete(chatId, 'Пожалуйста, введите желаемое количество:');
     } else if (data === 'add_product') {
+        // Changed icon for "add product" button: added "➕"
         userState[chatId] = { step: 'add_product_name' };
-        await sendMessageWithDelete(chatId, 'Введите название продукта:');
+        await sendMessageWithDelete(chatId, 'Введите название продукта: (пример: ➕ Новый продукт)');
     } else if (data === 'help') {
         await sendMessageWithDelete(
             chatId,
@@ -253,7 +267,6 @@ bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
-    // Button "🛍 Каталог" logic
     if (text === '🛍 Каталог') {
         try {
             const response = await axios.get('http://api:5000/api/products');
@@ -277,7 +290,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Orders section with detailed information and product composition
     if (text === '📋 Заказы') {
         const ordersUrl = `http://api:5000/api/orders/client/${chatId}`;
         console.log(`[Заказы] Requesting orders from URL: ${ordersUrl}`);
@@ -294,7 +306,6 @@ bot.on('message', async (msg) => {
                 return;
             }
 
-            // Log full orders object for diagnosis
             console.log('[Заказы] Returned orders:', JSON.stringify(orders, null, 2));
 
             let ordersList = 'Ваши заказы:\n\n';
@@ -309,7 +320,6 @@ bot.on('message', async (msg) => {
                 }
                 if (order.products && order.products.length > 0) {
                     ordersList += 'Состав заказа:\n';
-                    // For each product, fetch product details from API /api/products/{id}
                     for (const [index, prod] of order.products.entries()) {
                         console.log(`[Заказы] Order ${order._id} product ${index + 1}:`, prod);
                         const pId = prod.productId;
@@ -360,11 +370,11 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    if (text === 'Управление') {
+    if (text === '⚙️ Управление') {
         const managementMenu = {
             reply_markup: JSON.stringify({
                 inline_keyboard: [
-                    [{ text: 'Добавить продукт', callback_data: 'add_product' }],
+                    [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
                     [{ text: '⬅️ Назад', callback_data: 'back_to_main' }],
                 ],
             }),
@@ -377,7 +387,6 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // Product addition flow
     if (userState[chatId].step === 'add_product_name') {
         userState[chatId].productName = text;
         userState[chatId].step = 'add_product_description';
@@ -426,11 +435,7 @@ bot.on('message', async (msg) => {
             await axios.post('http://api:5000/api/products', newProduct);
             await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен!`);
             setTimeout(async () => {
-                await sendMessageWithDelete(
-                    chatId,
-                    'Добро пожаловать в наш магазин! Вот что у нас сейчас есть вкусненького:',
-                    mainMenu
-                );
+                await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋😊🌟', mainMenu);
             }, 2000);
             delete userState[chatId];
         } catch (error) {
@@ -467,7 +472,7 @@ bot.on('message', async (msg) => {
                 products: [
                     {
                         productId: userState[chatId].selectedProduct._id,
-                        name: userState[chatId].selectedProduct.name, // сохраняем название в поле "name"
+                        name: userState[chatId].selectedProduct.name,
                         quantity: userState[chatId].quantity,
                         price: userState[chatId].selectedProduct.price,
                     },
