@@ -1,6 +1,6 @@
 /**
  * Telegram Bot for E-commerce
- * @lastModified 2025-02-23 02:40:00 UTC
+ * @lastModified 2025-02-23 03:45:00 UTC
  * @user maxwebgt
  */
 
@@ -40,10 +40,6 @@ function prepareReplyMarkup(options = {}) {
             console.error('[prepareReplyMarkup] Error parsing reply_markup:', error);
         }
     }
-    // Updated keyboard layout:
-    // Row 1: "🍞 Каталог" (bread icon for neutrality and vegan-friendly) and "📋 Заказы"
-    // Row 2: "⚙️ Управление"
-    // Row 3: "❓ Помощь"
     const replyKeyboard = {
         keyboard: [
             ['🍞 Каталог', '📋 Заказы'],
@@ -146,7 +142,7 @@ bot.onText(/\/start/, async (msg) => {
             }
         }
     }
-    await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
+    await sendMessageWithDelete(msg.chat.id, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
 });
 
 bot.on('callback_query', async (callbackQuery) => {
@@ -169,12 +165,48 @@ bot.on('callback_query', async (callbackQuery) => {
         }
         const order = orderDetails.order || orderDetails;
         console.log('[Order View] Using order object:', order);
+        // Build extended details text with more information about the order:
         let detailsText = `Заказ №${order._id}\n`;
         detailsText += `Статус: ${order.status}\n`;
         detailsText += `Сумма: ${order.totalAmount} ₽\n`;
         detailsText += `Адрес доставки: ${order.shippingAddress}\n`;
+        if (order.phone) detailsText += `Телефон: ${order.phone}\n`;
+        if (order.description) detailsText += `Описание: ${order.description}\n`;
+        if (order.paymentStatus) detailsText += `Статус оплаты: ${order.paymentStatus}\n`;
+        if (order.paymentMethod) detailsText += `Метод оплаты: ${order.paymentMethod}\n`;
+        if (order.contactEmail) detailsText += `Email: ${order.contactEmail}\n`;
+        if (order.contactPhone) detailsText += `Контактный телефон: ${order.contactPhone}\n`;
         if (order.statusHistory && order.statusHistory.length > 0) {
             detailsText += `Дата создания: ${new Date(order.statusHistory[0].timestamp).toLocaleString()}\n`;
+        }
+        if (order.products && order.products.length > 0) {
+            detailsText += `\nСостав заказа:\n`;
+            // For each order product, fetch product details using productId from API /api/products/{id}
+            try {
+                // Map each product to a promise which fetches its details.
+                const productPromises = order.products.map(prod =>
+                    axios.get(`http://api:5000/api/products/${prod.productId}`)
+                        .then(res => ({
+                            name: res.data.name,
+                            quantity: prod.quantity,
+                            price: prod.price
+                        }))
+                        .catch(err => ({
+                            name: 'Неизвестный продукт',
+                            quantity: prod.quantity,
+                            price: prod.price
+                        }))
+                );
+                const productDetails = await Promise.all(productPromises);
+                productDetails.forEach((p, index) => {
+                    detailsText += `  ${index + 1}. ${p.name} x${p.quantity} — ${p.price} ₽ за шт, Итого: ${p.price * p.quantity} ₽\n`;
+                });
+            } catch (error) {
+                console.error('Error fetching product details:', error);
+            }
+        }
+        if (order.deliveryInfo && order.deliveryInfo.deliveryInstructions) {
+            detailsText += `\nИнструкция по доставке: ${order.deliveryInfo.deliveryInstructions}\n`;
         }
         const inlineKeyboard = {
             inline_keyboard: [
@@ -256,7 +288,9 @@ bot.on('callback_query', async (callbackQuery) => {
         });
         productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
         userState[chatId].step = 'select_product';
-        await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
+        await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', {
+            reply_markup: JSON.stringify({ inline_keyboard: productButtons }),
+        });
     }
     else if (data === 'back_to_main') {
         userState[chatId] = { step: 'main_menu' };
@@ -292,8 +326,9 @@ async function displayOrdersList(chatId) {
         }
         console.log('[Orders List] Returned orders:', JSON.stringify(orders, null, 2));
         const inlineKeyboard = orders.map(order => {
+            const orderIdShort = order._id.slice(-4);
             return [{
-                text: `Заказ №${order._id} - ${order.totalAmount} ₽`,
+                text: `№${orderIdShort} • ${order.totalAmount} ₽ • ${order.status}`,
                 callback_data: `view_order_${order._id}`
             }];
         });
@@ -460,11 +495,8 @@ bot.on('message', async (msg) => {
             await axios.post('http://api:5000/api/orders', order);
             let orderInfo = `Заказ успешно создан!\n\nПродукт: ${userState[chatId].selectedProduct.name}\nКоличество: ${userState[chatId].quantity}\nСумма: ${order.totalAmount} ₽\nТелефон: ${userState[chatId].phone}\nАдрес доставки: ${text}\nОписание: ${userState[chatId].description}\n\nСтатус: ${order.status}\nОплата: ${order.paymentStatus}\n\nСостав заказа:\n`;
             order.products.forEach((prod, index) => {
-                orderInfo += `  ${index + 1}. ${prod.name} `;
-                if (prod.quantity) { orderInfo += `x ${prod.quantity} `; }
-                if (prod.price) {
-                    orderInfo += `— Цена за штуку: ${prod.price} ₽, Итого: ${prod.price * prod.quantity} ₽\n`;
-                }
+                const prodName = prod.name || prod.productName || 'Неизвестный продукт';
+                orderInfo += `  ${index + 1}. ${prodName} x ${prod.quantity} — ${prod.price} ₽ за шт, Итого: ${prod.price * prod.quantity} ₽\n`;
             });
             await sendMessageWithDelete(chatId, orderInfo);
             setTimeout(async () => {
