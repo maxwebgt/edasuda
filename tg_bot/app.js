@@ -701,13 +701,123 @@ bot.on('callback_query', async (callbackQuery) => {
             reply_markup: JSON.stringify({
                 inline_keyboard: [
                     [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
-                    [{ text: '💰 Расходы', callback_data: 'expenses_menu' }],
+                    [
+                        { text: '💰 Расходы', callback_data: 'expenses_menu' },
+                        { text: '💵 Доходы', callback_data: 'income_menu' }
+                    ],
+                    [{ text: '📰 Новости', callback_data: 'news_menu' }],
                     [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
                     [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
                 ],
             }),
         };
         await sendMessageWithDelete(chatId, 'Панель управления:', managementMenu);
+    }
+    else if (data === 'income_menu') {
+        try {
+            console.log(`[Income] Запрашиваем заказы для повара ${chatId}`);
+            const response = await axios.get(`http://api:5000/api/orders/chef/${chatId}`);
+            console.log('[Income] Получен ответ от API:', JSON.stringify(response.data, null, 2));
+
+            const orders = response.data.orders || [];
+            console.log(`[Income] Количество заказов: ${orders.length}`);
+
+            if (!orders || orders.length === 0) {
+                await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
+                return;
+            }
+
+            let totalIncome = 0;
+            let incomeMessage = '💵 Ваши доходы:\n\n';
+            const ordersByMonth = {};
+
+            for (const order of orders) {
+                console.log(`[Income] Обработка заказа ${order._id}`);
+                console.log(`[Income] Статус заказа: ${order.status}`);
+
+                // Проверяем, что заказ принадлежит этому повару
+                if (order.chefId === chatId.toString()) {
+                    const date = new Date(order.createdAt);
+                    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+                    if (!ordersByMonth[monthKey]) {
+                        ordersByMonth[monthKey] = {
+                            orders: [],
+                            total: 0
+                        };
+                    }
+
+                    // Берем все продукты из заказа, так как заказ уже принадлежит повару
+                    const orderIncome = order.products.reduce((sum, product) => {
+                        const productTotal = product.price * product.quantity;
+                        console.log(`[Income] Доход с продукта: ${productTotal} (цена: ${product.price}, количество: ${product.quantity})`);
+                        return sum + productTotal;
+                    }, 0);
+
+                    console.log(`[Income] Доход с заказа: ${orderIncome}`);
+
+                    if (orderIncome > 0) {
+                        ordersByMonth[monthKey].orders.push({
+                            id: order._id,
+                            date: date.toLocaleDateString('ru-RU'),
+                            products: order.products,
+                            total: orderIncome,
+                            status: order.status
+                        });
+                        ordersByMonth[monthKey].total += orderIncome;
+                        totalIncome += orderIncome;
+                    }
+                }
+            }
+
+            console.log(`[Income] Общий доход: ${totalIncome}`);
+            console.log('[Income] Группировка по месяцам:', ordersByMonth);
+
+            if (totalIncome === 0) {
+                await sendMessageWithDelete(chatId, 'У вас пока нет доходов по заказам.');
+                return;
+            }
+
+            // Формируем сообщение по месяцам
+            for (const [month, data] of Object.entries(ordersByMonth).sort().reverse()) {
+                const [year, monthNum] = month.split('-');
+                const monthName = new Date(year, monthNum - 1).toLocaleString('ru-RU', { month: 'long' });
+
+                if (data.orders.length > 0) {
+                    incomeMessage += `\n📅 ${monthName} ${year}\n`;
+                    incomeMessage += `└─ Доход за месяц: ${data.total} ₽\n`;
+
+                    for (const order of data.orders) {
+                        incomeMessage += `\n🔹 Заказ №${order.id.slice(-4)} от ${order.date}\n`;
+                        incomeMessage += `📊 Статус: ${order.status}\n`;
+                        for (const product of order.products) {
+                            // Получаем название продукта из API или используем ID, если название недоступно
+                            const productName = product.name || `Продукт ${product.productId}`;
+                            incomeMessage += `   • ${productName} x${product.quantity} — ${product.price} ₽\n`;
+                        }
+                        incomeMessage += `   Итого по заказу: ${order.total} ₽\n`;
+                    }
+                    incomeMessage += `\n${'─'.repeat(20)}\n`;
+                }
+            }
+
+            incomeMessage += `\n💰 Общий доход: ${totalIncome} ₽`;
+
+            const keyboard = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                    ]
+                })
+            };
+
+            await sendMessageWithDelete(chatId, incomeMessage, keyboard);
+
+        } catch (error) {
+            console.error('Error fetching income:', error);
+            console.error('Error details:', error.response?.data);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении информации о доходах.');
+        }
     }
     else if (data === 'orders_list') {
         await displayOrdersList(chatId);
@@ -1142,8 +1252,11 @@ bot.on('message', async (msg) => {
                 reply_markup: JSON.stringify({
                     inline_keyboard: [
                         [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
-                        [{ text: '💰 Расходы', callback_data: 'expenses_menu' }],
-                        [{ text: '📰 Новости', callback_data: 'news_menu' }], // Добавляем кнопку новостей
+                        [
+                            { text: '💰 Расходы', callback_data: 'expenses_menu' },
+                            { text: '💵 Доходы', callback_data: 'income_menu' }
+                        ],
+                        [{ text: '📰 Новости', callback_data: 'news_menu' }],
                         [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
                         [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
                     ],
