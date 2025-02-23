@@ -1163,78 +1163,71 @@ bot.on('callback_query', async (callbackQuery) => {
                 })
             };
 
-            // Если у продукта есть изображение
-            if (selectedProduct.filename || selectedProduct.image) {
-                // Получаем изображение
-                const filename = selectedProduct.filename || selectedProduct.image;
-                const imageResponse = await axios.get(
-                    `http://api:5000/api/images/file/${filename}`,
-                    { responseType: 'arraybuffer' }
-                );
-                const photoBuffer = Buffer.from(imageResponse.data);
+            // Удаляем предыдущее сообщение
+            if (lastBotMessages[chatId]) {
+                try {
+                    await bot.deleteMessage(chatId, lastBotMessages[chatId]);
+                } catch (error) {
+                    console.log('Error deleting previous message:', error.message);
+                }
+            }
 
-                // Проверяем наличие видео
-                if (selectedProduct.video) {
-                    // Если есть видео, отправляем медиагруппу
-                    const mediaGroup = [
-                        {
-                            type: 'photo',
-                            media: photoBuffer,
-                            caption: productInfo
-                        }
-                    ];
+            // Если у продукта есть видео
+            if (selectedProduct.video) {
+                try {
+                    // Получаем видео
+                    const videoResponse = await axios.get(
+                        `http://api:5000/api/videos/${selectedProduct.video}`,
+                        { responseType: 'arraybuffer' }
+                    );
+                    const videoBuffer = Buffer.from(videoResponse.data);
 
-                    try {
-                        // Получаем видео
-                        const videoResponse = await axios.get(
-                            `http://api:5000/api/videos/${selectedProduct.video}`,
-                            { responseType: 'arraybuffer' }
-                        );
+                    // Отправляем видео с информацией о продукте
+                    const videoMessage = await bot.sendVideo(chatId, videoBuffer, {
+                        caption: productInfo,
+                        ...productActionButtons
+                    });
 
-                        // Добавляем видео в медиагруппу
-                        mediaGroup.push({
-                            type: 'video',
-                            media: Buffer.from(videoResponse.data)
-                        });
-
-                        // Удаляем предыдущее сообщение
-                        if (lastBotMessages[chatId]) {
-                            try {
-                                await bot.deleteMessage(chatId, lastBotMessages[chatId]);
-                            } catch (error) {
-                                console.log('Error deleting previous message:', error.message);
-                            }
-                        }
-
-                        // Отправляем медиагруппу
-                        const messages = await bot.sendMediaGroup(chatId, mediaGroup);
-
-                        // Сохраняем ID последнего сообщения
-                        if (messages && messages.length > 0) {
-                            lastBotMessages[chatId] = messages[messages.length - 1].message_id;
-                        }
-
-                        // Отправляем кнопки в отдельном сообщении
-                        await bot.sendMessage(chatId, 'Выберите действие:', productActionButtons);
-
-                    } catch (videoError) {
-                        console.error('Error loading video:', videoError);
-                        // Если не удалось загрузить видео, отправляем только фото
-                        await sendPhotoWithDelete(chatId, photoBuffer, {
-                            caption: productInfo + '\n\n⚠️ Видео недоступно',
-                            ...productActionButtons
-                        });
+                    // Сохраняем ID сообщения для последующего удаления
+                    if (videoMessage) {
+                        lastBotMessages[chatId] = videoMessage.message_id;
                     }
-                } else {
-                    // Если нет видео, отправляем только фото
+                } catch (videoError) {
+                    console.error('Error sending video:', videoError);
+                    await sendMessageWithDelete(chatId,
+                        `${productInfo}\n\n❌ Ошибка: Видео недоступно`,
+                        productActionButtons
+                    );
+                }
+            }
+            // Если нет видео, но есть фото
+            else if (selectedProduct.filename || selectedProduct.image) {
+                try {
+                    const filename = selectedProduct.filename || selectedProduct.image;
+                    const imageResponse = await axios.get(
+                        `http://api:5000/api/images/file/${filename}`,
+                        { responseType: 'arraybuffer' }
+                    );
+                    const photoBuffer = Buffer.from(imageResponse.data);
+
                     await sendPhotoWithDelete(chatId, photoBuffer, {
                         caption: productInfo,
                         ...productActionButtons
                     });
+                } catch (imageError) {
+                    console.error('Error sending photo:', imageError);
+                    await sendMessageWithDelete(chatId,
+                        `${productInfo}\n\n❌ Ошибка: Фото недоступно`,
+                        productActionButtons
+                    );
                 }
-            } else {
-                // Если нет ни фото, ни видео
-                await sendMessageWithDelete(chatId, productInfo, productActionButtons);
+            }
+            // Если нет ни видео, ни фото
+            else {
+                await sendMessageWithDelete(chatId,
+                    `${productInfo}\n\n❌ Ошибка: Фото и/или видео отсутствует`,
+                    productActionButtons
+                );
             }
 
             // Обновляем состояние
@@ -1587,8 +1580,33 @@ bot.on('message', async (msg) => {
             msg.document.mime_type &&
             msg.document.mime_type.startsWith('video/');
 
-        if (text?.toLowerCase() === 'пропустить') {
-            // ... код для пропуска загрузки видео ...
+        if (text?.toLowerCase() === 'пропустить' || text?.toLowerCase() === '-') {
+            try {
+                // Создаем продукт без видео
+                const newProduct = {
+                    name: userState[chatId].productName,
+                    description: userState[chatId].productDescription,
+                    price: userState[chatId].productPrice,
+                    category: userState[chatId].productCategory,
+                    image: userState[chatId].productImage,
+                    chefId: chatId.toString()
+                };
+
+                logDebug('Product Creation', 'Creating product without video', newProduct);
+                const productResponse = await axios.post('http://api:5000/api/products', newProduct);
+                logDebug('Product Creation', 'Product created successfully', productResponse.data);
+
+                await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен! 📸`);
+                setTimeout(async () => {
+                    await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
+                }, 2000);
+                delete userState[chatId];
+                return;
+            } catch (error) {
+                logDebug('Product Creation', 'Error creating product', error);
+                await sendMessageWithDelete(chatId, 'Произошла ошибка при создании продукта. Попробуйте снова.');
+                return;
+            }
         } else if (msg.video || (msg.document && msg.document.mime_type?.startsWith('video/'))) {
             try {
                 logDebug('Video Handler', 'Starting video processing', {
