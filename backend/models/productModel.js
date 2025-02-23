@@ -21,6 +21,10 @@ const productSchema = new mongoose.Schema({
         type: String,
         default: '',  // Поле для хранения URL изображения
     },
+    video: {
+        type: String,
+        default: '',  // Поле для хранения URL видео
+    },
     stock: {
         type: Number,
         default: 0,  // Количество в наличии

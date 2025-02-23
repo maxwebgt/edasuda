@@ -177,7 +177,7 @@ app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
     next();
 });
-
+app.use('/uploads/videos', express.static(path.join(__dirname, 'uploads/videos')));
 // Настройка статических файлов
 app.use('/media', express.static(path.join(__dirname, 'uploads'), {
     setHeaders: (res, filePath) => {

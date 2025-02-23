@@ -1,150 +1,108 @@
-/**
- * Video Routes
- * @file routes/videoRoutes.js
- * @description API routes for video operations
- * @lastModified 2025-02-23 21:36:07
- * @user maxwebgt
- */
+const express = require('express');
+const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 /**
  * @swagger
  * tags:
  *   name: Videos
- *   description: API эндпоинты для работы с видео файлами
- *
+ *   description: API endpoints for managing video files
+ */
+
+/**
+ * @swagger
  * components:
  *   schemas:
- *     Video:
- *       type: object
- *       required:
- *         - filename
- *         - originalName
- *         - contentType
- *         - size
- *       properties:
- *         _id:
- *           type: string
- *           description: Уникальный идентификатор видео
- *         filename:
- *           type: string
- *           description: Имя файла в системе
- *         originalName:
- *           type: string
- *           description: Оригинальное имя файла
- *         title:
- *           type: string
- *           description: Название видео
- *         description:
- *           type: string
- *           description: Описание видео
- *         contentType:
- *           type: string
- *           description: MIME тип файла
- *         size:
- *           type: number
- *           description: Размер файла в байтах
- *         uploadedBy:
- *           type: string
- *           description: ID пользователя, загрузившего видео
- *         videoUrl:
- *           type: string
- *           description: URL для прямого доступа к видео
- *         streamUrl:
- *           type: string
- *           description: URL для стриминга видео
- *         createdAt:
- *           type: string
- *           format: date-time
- *           description: Дата и время создания
- *         updatedAt:
- *           type: string
- *           format: date-time
- *           description: Дата и время последнего обновления
- *
- *     VideoResponse:
+ *     VideoUploadResponse:
  *       type: object
  *       properties:
- *         message:
- *           type: string
- *           example: File exists
- *         size:
- *           type: number
- *           example: 1048576
- *         path:
- *           type: string
- *           example: /app/uploads/videos/video.mp4
- *         isFile:
+ *         success:
  *           type: boolean
- *           example: true
- *         permissions:
- *           type: number
- *           example: 33188
- *
- *     VideoStats:
- *       type: object
- *       properties:
- *         totalVideos:
- *           type: number
- *           description: Общее количество видео
- *         totalSize:
- *           type: number
- *           description: Общий размер всех видео в байтах
- *         averageSize:
- *           type: number
- *           description: Средний размер видео в байтах
- *
+ *           description: Indicates if the upload was successful
+ *         video:
+ *           type: object
+ *           properties:
+ *             filename:
+ *               type: string
+ *               description: The name of the saved file
+ *             originalname:
+ *               type: string
+ *               description: Original name of the uploaded file
+ *             mimetype:
+ *               type: string
+ *               description: MIME type of the video
+ *             size:
+ *               type: number
+ *               description: Size of the file in bytes
+ *             url:
+ *               type: string
+ *               description: URL to access the video
  *     Error:
  *       type: object
  *       properties:
+ *         success:
+ *           type: boolean
+ *           description: Always false for errors
  *         message:
  *           type: string
- *           description: Сообщение об ошибке
- *         error:
- *           type: string
- *           description: Детали ошибки
- *
- * /api/videos:
- *   get:
- *     summary: Получить список всех видео
- *     tags: [Videos]
- *     responses:
- *       200:
- *         description: Список видео успешно получен
- *         content:
- *           application/json:
- *             schema:
- *               type: array
- *               items:
- *                 $ref: '#/components/schemas/Video'
- *       500:
- *         description: Ошибка сервера
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *
- * /api/videos/stats:
- *   get:
- *     summary: Получить статистику видео
- *     tags: [Videos]
- *     responses:
- *       200:
- *         description: Статистика успешно получена
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/VideoStats'
- *       500:
- *         description: Ошибка сервера
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *
+ *           description: Error message
+ */
+
+// Создаем абсолютный путь к директории с видео
+const uploadDir = path.resolve(__dirname, '../uploads/videos');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const debug = require('debug')('api:videos');
+// Настройка хранилища для видео
+// Настройка хранилища
+// Настройка хранилища
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, uploadDir);
+    },
+    filename: function (req, file, cb) {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        cb(null, 'video-' + uniqueSuffix + path.extname(file.originalname));
+    }
+});
+
+// Настройка фильтра файлов
+// Фильтр файлов
+const fileFilter = (req, file, cb) => {
+    console.log('[Video Upload] Received file:', {
+        fieldname: file.fieldname,
+        originalname: file.originalname,
+        mimetype: file.mimetype
+    });
+
+    // Принимаем все видео форматы
+    if (file.mimetype.startsWith('video/') ||
+        file.originalname.match(/\.(mp4|mov|avi|wmv|flv|mkv|webm)$/i)) {
+        cb(null, true);
+    } else {
+        cb(new Error('Only video files are allowed'));
+    }
+};
+
+const upload = multer({
+    storage: storage,
+    limits: {
+        fileSize: 50 * 1024 * 1024 // 50MB
+    }
+}).single('video');
+
+/**
+ * @swagger
  * /api/videos/upload:
  *   post:
- *     summary: Загрузить новое видео
+ *     summary: Upload a video file
  *     tags: [Videos]
+ *     consumes:
+ *       - multipart/form-data
  *     requestBody:
  *       required: true
  *       content:
@@ -155,357 +113,226 @@
  *               video:
  *                 type: string
  *                 format: binary
- *                 description: Видео файл
- *               title:
- *                 type: string
- *                 description: Название видео
- *               description:
- *                 type: string
- *                 description: Описание видео
+ *                 description: Video file to upload (max 50MB)
  *     responses:
- *       201:
- *         description: Видео успешно загружено
+ *       200:
+ *         description: Video successfully uploaded
  *         content:
  *           application/json:
  *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                 video:
- *                   $ref: '#/components/schemas/Video'
+ *               $ref: '#/components/schemas/VideoUploadResponse'
  *       400:
- *         description: Ошибка при загрузке
+ *         description: Invalid request or file type
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
- *
- * /api/videos/file/{filename}:
- *   get:
- *     summary: Получить видео файл по имени файла
- *     tags: [Videos]
- *     parameters:
- *       - in: path
- *         name: filename
- *         required: true
- *         schema:
- *           type: string
- *         description: Имя файла видео
- *     responses:
- *       200:
- *         description: Видео файл
- *         content:
- *           video/mp4:
- *             schema:
- *               type: string
- *               format: binary
- *       404:
- *         description: Файл не найден
+ *       413:
+ *         description: File too large
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
- *
- * /api/videos/{id}:
- *   get:
- *     summary: Получить видео по ID
- *     tags: [Videos]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: ID видео
- *     responses:
- *       200:
- *         description: Видео найдено
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Video'
- *       404:
- *         description: Видео не найдено
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *
- *   put:
- *     summary: Обновить метаданные видео
- *     tags: [Videos]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: ID видео
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               title:
- *                 type: string
- *                 description: Новое название видео
- *               description:
- *                 type: string
- *                 description: Новое описание видео
- *     responses:
- *       200:
- *         description: Видео обновлено
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Video'
- *       404:
- *         description: Видео не найдено
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *
- *   delete:
- *     summary: Удалить видео
- *     tags: [Videos]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: ID видео
- *     responses:
- *       200:
- *         description: Видео удалено
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *       404:
- *         description: Видео не найдено
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *
- * /api/videos/test/{filename}:
- *   get:
- *     summary: Тестовый эндпоинт для проверки доступа к видео файлу
- *     tags: [Videos]
- *     parameters:
- *       - in: path
- *         name: filename
- *         required: true
- *         schema:
- *           type: string
- *         description: Имя файла для проверки
- *     responses:
- *       200:
- *         description: Информация о файле успешно получена
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/VideoResponse'
- *       404:
- *         description: Файл не найден
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- *
- * /api/videos/test-stream/{filename}:
- *   get:
- *     summary: Тестовый эндпоинт для стриминга видео
- *     tags: [Videos]
- *     parameters:
- *       - in: path
- *         name: filename
- *         required: true
- *         schema:
- *           type: string
- *         description: Имя файла для стриминга
- *     responses:
- *       200:
- *         description: Стрим видео файла
- *         content:
- *           video/mp4:
- *             schema:
- *               type: string
- *               format: binary
- *       404:
- *         description: Файл не найден
  *       500:
- *         description: Ошибка сервера при стриминге
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
+// В обработчике загрузки
+router.get('/:filename', (req, res) => {
+    const { filename } = req.params;
+    const filePath = path.join(uploadDir, filename);
 
-const express = require('express');
-const router = express.Router();
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const videoController = require('../controllers/videoController');
-
-// Настройка Multer для загрузки видео
-const storage = multer.memoryStorage();
-const upload = multer({
-    storage: storage,
-    limits: {
-        fileSize: 50 * 1024 * 1024 // 50MB максимальный размер файла
-    },
-    fileFilter: (req, file, cb) => {
-        if (file.mimetype.startsWith('video/')) {
-            cb(null, true);
-        } else {
-            cb(new Error('Только видео файлы разрешены!'), false);
-        }
-    }
-});
-
-// Тестовый маршрут для проверки доступа к файлу
-router.get('/test/:filename', async (req, res) => {
-    const filename = req.params.filename;
-    const filePath = path.join(__dirname, '../uploads/videos', filename);
-
-    console.log('Testing video access:', {
-        requestedFile: filename,
-        fullPath: filePath,
-        exists: fs.existsSync(filePath)
-    });
-
-    if (fs.existsSync(filePath)) {
-        const stat = fs.statSync(filePath);
-        console.log('File stats:', stat);
-        res.json({
-            message: 'File exists',
-            size: stat.size,
-            path: filePath,
-            isFile: stat.isFile(),
-            permissions: stat.mode
-        });
-    } else {
-        res.status(404).json({
-            message: 'File not found',
-            path: filePath
-        });
-    }
-});
-
-// Тестовый маршрут для стриминга файла
-router.get('/test-stream/:filename', async (req, res) => {
-    const filename = req.params.filename;
-    const filePath = path.join(__dirname, '../uploads/videos', filename);
-
-    console.log('[test-stream] Starting:', {
+    console.log('[Video Get] Request for video:', {
         filename,
         filePath,
         exists: fs.existsSync(filePath)
     });
 
+    // Проверяем существование файла
     if (!fs.existsSync(filePath)) {
+        console.error(`[Video Get] File not found: ${filePath}`);
         return res.status(404).json({
-            message: 'File not found',
-            path: filePath
+            success: false,
+            message: 'Video not found'
         });
     }
 
     try {
+        // Получаем размер файла
         const stat = fs.statSync(filePath);
+        const fileSize = stat.size;
+
+        // Настраиваем заголовки для стриминга
         const range = req.headers.range;
-
-        if (!range) {
-            console.log('[test-stream] Sending full file:', {
-                size: stat.size,
-                type: 'video/mp4'
-            });
-
-            res.writeHead(200, {
-                'Content-Length': stat.size,
-                'Content-Type': 'video/mp4',
+        if (range) {
+            const parts = range.replace(/bytes=/, "").split("-");
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const chunksize = (end - start) + 1;
+            const file = fs.createReadStream(filePath, { start, end });
+            const head = {
+                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
                 'Accept-Ranges': 'bytes',
-                'Cache-Control': 'public, max-age=3600'
-            });
-
-            const stream = fs.createReadStream(filePath);
-
-            stream.on('open', () => console.log('[test-stream] Stream opened'));
-            stream.on('end', () => console.log('[test-stream] Stream ended'));
-            stream.on('error', (err) => {
-                console.error('[test-stream] Stream error:', err);
-                if (!res.headersSent) {
-                    res.status(500).json({ error: 'Stream error' });
-                }
-            });
-
-            req.on('close', () => {
-                console.log('[test-stream] Request closed');
-                stream.destroy();
-            });
-
-            return stream.pipe(res);
+                'Content-Length': chunksize,
+                'Content-Type': 'video/mp4',
+            };
+            res.writeHead(206, head);
+            file.pipe(res);
+        } else {
+            const head = {
+                'Content-Length': fileSize,
+                'Content-Type': 'video/mp4',
+            };
+            res.writeHead(200, head);
+            fs.createReadStream(filePath).pipe(res);
         }
-
-        const parts = range.replace(/bytes=/, '').split('-');
-        const start = parseInt(parts[0], 10);
-        const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
-        const chunksize = (end - start) + 1;
-
-        console.log('[test-stream] Sending range:', {
-            start,
-            end,
-            chunksize,
-            total: stat.size
-        });
-
-        res.writeHead(206, {
-            'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-            'Accept-Ranges': 'bytes',
-            'Content-Length': chunksize,
-            'Content-Type': 'video/mp4',
-            'Cache-Control': 'public, max-age=3600'
-        });
-
-        const stream = fs.createReadStream(filePath, { start, end });
-
-        stream.on('open', () => console.log('[test-stream] Range stream opened'));
-        stream.on('end', () => console.log('[test-stream] Range stream ended'));
-        stream.on('error', (err) => {
-            console.error('[test-stream] Range stream error:', err);
-            if (!res.headersSent) {
-                res.status(500).json({ error: 'Range stream error' });
-            }
-        });
-
-        req.on('close', () => {
-            console.log('[test-stream] Range request closed');
-            stream.destroy();
-        });
-
-        return stream.pipe(res);
-
     } catch (error) {
-        console.error('[test-stream] Error:', error);
+        console.error('[Video Get] Error:', error);
         res.status(500).json({
-            message: 'Error streaming video',
-            error: error.message
+            success: false,
+            message: 'Error sending video file'
         });
     }
 });
 
-// Основные API маршруты
-router.get('/', videoController.getAllVideos);
-router.get('/stats', videoController.getVideoStats);
-router.post('/upload', upload.single('video'), videoController.uploadVideo);
-router.get('/file/:filename', videoController.getVideoFileByFilename);
-router.get('/:id', videoController.getVideoById);
-router.put('/:id', videoController.updateVideo);
-router.delete('/:id', videoController.deleteVideo);
+// Обработчик загрузки видео
+router.post('/upload', (req, res) => {
+    upload(req, res, function(err) {
+        if (err instanceof multer.MulterError) {
+            console.error('[Video Upload] Multer error:', err);
+            return res.status(400).json({
+                success: false,
+                message: `Upload error: ${err.message}`
+            });
+        } else if (err) {
+            console.error('[Video Upload] Other error:', err);
+            return res.status(400).json({
+                success: false,
+                message: err.message
+            });
+        }
+
+        if (!req.file) {
+            return res.status(400).json({
+                success: false,
+                message: 'No video file uploaded'
+            });
+        }
+
+        // Возвращаем информацию о загруженном файле
+        res.json({
+            success: true,
+            video: {
+                filename: req.file.filename,
+                originalname: req.file.originalname,
+                mimetype: req.file.mimetype,
+                size: req.file.size,
+                url: `/uploads/videos/${req.file.filename}`
+            }
+        });
+    });
+});
+
+
+/**
+ * @swagger
+ * /api/videos/{filename}:
+ *   delete:
+ *     summary: Delete a video file
+ *     tags: [Videos]
+ *     parameters:
+ *       - in: path
+ *         name: filename
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Filename of the video to delete
+ *     responses:
+ *       200:
+ *         description: Video successfully deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Video deleted successfully
+ *       404:
+ *         description: Video not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.delete('/:filename', async (req, res) => {
+    const { filename } = req.params;
+    const filePath = path.join(uploadDir, filename);
+
+    try {
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({
+                success: false,
+                message: 'Video not found'
+            });
+        }
+
+        await fs.promises.unlink(filePath);
+
+        res.json({
+            success: true,
+            message: 'Video deleted successfully'
+        });
+    } catch (error) {
+        console.error('[Video Delete] Error deleting video:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error deleting video file'
+        });
+    }
+});
+
+// Middleware для обработки ошибок
+router.use((error, req, res, next) => {
+    console.error('[Video Router] Error:', error);
+
+    if (error instanceof multer.MulterError) {
+        switch (error.code) {
+            case 'LIMIT_FILE_SIZE':
+                return res.status(413).json({
+                    success: false,
+                    message: 'File is too large. Maximum size is 50MB'
+                });
+            case 'LIMIT_FILE_COUNT':
+                return res.status(400).json({
+                    success: false,
+                    message: 'Too many files uploaded. Maximum is 1 file'
+                });
+            default:
+                return res.status(400).json({
+                    success: false,
+                    message: `Upload error: ${error.message}`
+                });
+        }
+    }
+
+    if (error.message.includes('Invalid file type')) {
+        return res.status(400).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.status(500).json({
+        success: false,
+        message: 'Internal server error during video processing'
+    });
+});
 
 module.exports = router;

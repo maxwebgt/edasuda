@@ -43,6 +43,52 @@ const lastBotMessages = {};
 function getByteLength(str) {
     return Buffer.byteLength(str, 'utf8');
 }
+function debugMessageObject(msg) {
+    const debugObj = {
+        message_id: msg.message_id,
+        type: 'unknown',
+        contentTypes: []
+    };
+
+    if (msg.text) {
+        debugObj.type = 'text';
+        debugObj.contentTypes.push('text');
+    }
+    if (msg.photo) {
+        debugObj.type = 'photo';
+        debugObj.contentTypes.push('photo');
+    }
+    if (msg.video) {
+        debugObj.type = 'video';
+        debugObj.contentTypes.push('video');
+        debugObj.videoInfo = {
+            file_id: msg.video.file_id,
+            file_unique_id: msg.video.file_unique_id,
+            duration: msg.video.duration,
+            width: msg.video.width,
+            height: msg.video.height,
+            mime_type: msg.video.mime_type,
+            file_size: msg.video.file_size
+        };
+    }
+    if (msg.document) {
+        debugObj.type = 'document';
+        debugObj.contentTypes.push('document');
+        debugObj.documentInfo = {
+            file_id: msg.document.file_id,
+            file_name: msg.document.file_name,
+            mime_type: msg.document.mime_type
+        };
+    }
+
+    return debugObj;
+}
+// В начале файла добавим функцию для логирования
+function logDebug(prefix, ...args) {
+    const timestamp = new Date().toISOString();
+    console.log(`${timestamp} [${prefix}]`, ...args);
+}
+
 /**
  * Gets user role from API
  */
@@ -1094,32 +1140,113 @@ bot.on('callback_query', async (callbackQuery) => {
             await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении расхода.');
         }
     }
+    // В обработчике callback_query, найдите блок, где обрабатывается product_
     else if (data.startsWith('product_')) {
         const index = parseInt(data.split('_')[1], 10);
         const selectedProduct = userState[chatId].products[index];
-        const productInfo = `Вы выбрали продукт: ${selectedProduct.name}\nОписание: ${selectedProduct.description}\nЦена: ${selectedProduct.price} ₽`;
-        userState[chatId] = { step: 'view_product', selectedProduct, products: userState[chatId].products };
-        const productActionButtons = {
-            reply_markup: JSON.stringify({
-                inline_keyboard: [
-                    [
-                        { text: '🛍 Купить', callback_data: 'buy_product' },
-                        { text: '⬅️ Назад', callback_data: 'back_to_products' }
+
+        try {
+            // Формируем информацию о продукте
+            const productInfo = `Вы выбрали продукт: ${selectedProduct.name}\n` +
+                `Описание: ${selectedProduct.description}\n` +
+                `Цена: ${selectedProduct.price} ₽`;
+
+            // Создаем клавиатуру с кнопками действий
+            const productActionButtons = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [
+                            { text: '🛍 Купить', callback_data: 'buy_product' },
+                            { text: '⬅️ Назад', callback_data: 'back_to_products' }
+                        ]
                     ]
-                ]
-            }),
-        };
-        if (selectedProduct.filename || selectedProduct.image) {
-            try {
+                })
+            };
+
+            // Если у продукта есть изображение
+            if (selectedProduct.filename || selectedProduct.image) {
+                // Получаем изображение
                 const filename = selectedProduct.filename || selectedProduct.image;
-                const imageResponse = await axios.get(`http://api:5000/api/images/file/${filename}`, { responseType: 'arraybuffer' });
-                await sendPhotoWithDelete(chatId, Buffer.from(imageResponse.data), { caption: productInfo, ...productActionButtons });
-            } catch (error) {
-                console.error('Error sending photo:', error);
+                const imageResponse = await axios.get(
+                    `http://api:5000/api/images/file/${filename}`,
+                    { responseType: 'arraybuffer' }
+                );
+                const photoBuffer = Buffer.from(imageResponse.data);
+
+                // Проверяем наличие видео
+                if (selectedProduct.video) {
+                    // Если есть видео, отправляем медиагруппу
+                    const mediaGroup = [
+                        {
+                            type: 'photo',
+                            media: photoBuffer,
+                            caption: productInfo
+                        }
+                    ];
+
+                    try {
+                        // Получаем видео
+                        const videoResponse = await axios.get(
+                            `http://api:5000/api/videos/${selectedProduct.video}`,
+                            { responseType: 'arraybuffer' }
+                        );
+
+                        // Добавляем видео в медиагруппу
+                        mediaGroup.push({
+                            type: 'video',
+                            media: Buffer.from(videoResponse.data)
+                        });
+
+                        // Удаляем предыдущее сообщение
+                        if (lastBotMessages[chatId]) {
+                            try {
+                                await bot.deleteMessage(chatId, lastBotMessages[chatId]);
+                            } catch (error) {
+                                console.log('Error deleting previous message:', error.message);
+                            }
+                        }
+
+                        // Отправляем медиагруппу
+                        const messages = await bot.sendMediaGroup(chatId, mediaGroup);
+
+                        // Сохраняем ID последнего сообщения
+                        if (messages && messages.length > 0) {
+                            lastBotMessages[chatId] = messages[messages.length - 1].message_id;
+                        }
+
+                        // Отправляем кнопки в отдельном сообщении
+                        await bot.sendMessage(chatId, 'Выберите действие:', productActionButtons);
+
+                    } catch (videoError) {
+                        console.error('Error loading video:', videoError);
+                        // Если не удалось загрузить видео, отправляем только фото
+                        await sendPhotoWithDelete(chatId, photoBuffer, {
+                            caption: productInfo + '\n\n⚠️ Видео недоступно',
+                            ...productActionButtons
+                        });
+                    }
+                } else {
+                    // Если нет видео, отправляем только фото
+                    await sendPhotoWithDelete(chatId, photoBuffer, {
+                        caption: productInfo,
+                        ...productActionButtons
+                    });
+                }
+            } else {
+                // Если нет ни фото, ни видео
                 await sendMessageWithDelete(chatId, productInfo, productActionButtons);
             }
-        } else {
-            await sendMessageWithDelete(chatId, productInfo, productActionButtons);
+
+            // Обновляем состояние
+            userState[chatId] = {
+                step: 'view_product',
+                selectedProduct,
+                products: userState[chatId].products
+            };
+
+        } catch (error) {
+            console.error('Error displaying product:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при отображении продукта.');
         }
     }
     else if (data === 'back_to_products') {
@@ -1301,6 +1428,22 @@ async function displayMyOrders(chatId) {
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
+    const messageDebug = debugMessageObject(msg);
+    logDebug('Message Full Debug', 'Complete message object:', {
+        originalMessage: msg,
+        debugInfo: messageDebug
+    });
+
+    // Расширенное логирование для отладки
+    logDebug('Message Handler', 'Received message details:', {
+        chatId,
+        hasText: !!text,
+        hasPhoto: !!msg.photo,
+        hasVideo: !!msg.video,
+        messageType: msg.video ? 'video' : (msg.photo ? 'photo' : (text ? 'text' : 'other')),
+        videoDetails: msg.video,
+        userState: userState[chatId]
+    });
     if (text === '🍞 Каталог') {
         try {
             const response = await axios.get('http://api:5000/api/products');
@@ -1391,9 +1534,169 @@ bot.on('message', async (msg) => {
         }
     } else if (userState[chatId].step === 'add_product_category') {
         userState[chatId].productCategory = text;
-        userState[chatId].step = 'add_product_image';
-        await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте изображение продукта:');
+        userState[chatId].step = 'add_product_media';
+        await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте изображение продукта. После этого вы сможете добавить видео (или пропустить этот шаг):');
     }
+    // Обработка загрузки изображения
+    // Обработка фото
+    if (userState[chatId]?.step === 'add_product_media' && msg.photo) {
+        try {
+            const photo = msg.photo[msg.photo.length - 1];
+            const file = await bot.getFile(photo.file_id);
+            const fileLink = file.fileLink || await bot.getFileLink(photo.file_id);
+
+            const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+            const buffer = Buffer.from(response.data);
+            const timestamp = Date.now();
+            const filename = `${timestamp}.jpg`;
+
+            const form = new FormData();
+            form.append('image', buffer, {
+                filename: filename,
+                contentType: 'image/jpeg'
+            });
+
+            const imageResponse = await axios.post('http://api:5000/api/images/upload', form, {
+                headers: form.getHeaders()
+            });
+
+            userState[chatId].productImage = imageResponse.data.image.filename;
+            userState[chatId].step = 'waiting_for_video';
+
+            await sendMessageWithDelete(chatId,
+                'Изображение загружено! Теперь отправьте видео продукта (или напишите "пропустить" для пропуска этого шага):'
+            );
+            return;
+        } catch (error) {
+            logDebug('Image Upload', 'Error uploading image', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке изображения. Попробуйте снова.');
+            return;
+        }
+    }
+// Обработка загрузки видео или пропуска
+    if (userState[chatId]?.step === 'waiting_for_video') {
+        logDebug('Video Handler', 'Processing video step', {
+            messageTypes: messageDebug.contentTypes,
+            state: userState[chatId],
+            hasVideo: !!msg.video,
+            hasDocument: !!msg.document
+        });
+
+        // Проверяем, является ли документ видео файлом
+        const isVideoDocument = msg.document &&
+            msg.document.mime_type &&
+            msg.document.mime_type.startsWith('video/');
+
+        if (text?.toLowerCase() === 'пропустить') {
+            // ... код для пропуска загрузки видео ...
+        } else if (msg.video || (msg.document && msg.document.mime_type?.startsWith('video/'))) {
+            try {
+                logDebug('Video Handler', 'Starting video processing', {
+                    video: msg.video,
+                    document: msg.document
+                });
+
+                // Получаем file_id видео
+                const fileId = msg.video?.file_id || msg.document?.file_id;
+                if (!fileId) {
+                    throw new Error('No video file ID found');
+                }
+
+                // Получаем информацию о файле
+                const file = await bot.getFile(fileId);
+                logDebug('Video Handler', 'Got file info', file);
+
+                // Получаем ссылку на файл
+                const fileLink = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+                logDebug('Video Handler', 'Got file link', { fileLink });
+
+                // Загружаем видео
+                const videoResponse = await axios({
+                    method: 'get',
+                    url: fileLink,
+                    responseType: 'arraybuffer',
+                    maxContentLength: 50 * 1024 * 1024
+                });
+
+                logDebug('Video Handler', 'Downloaded video', {
+                    size: videoResponse.data.length,
+                    contentType: msg.video?.mime_type || msg.document?.mime_type
+                });
+
+                // Создаем форму
+                const form = new FormData();
+                const videoBuffer = Buffer.from(videoResponse.data);
+
+                form.append('video', videoBuffer, {
+                    filename: `video_${Date.now()}.mp4`,
+                    contentType: msg.video?.mime_type || msg.document?.mime_type || 'video/mp4'
+                });
+
+                // Отправляем на сервер
+                const uploadResponse = await axios.post(
+                    'http://api:5000/api/videos/upload',
+                    form,
+                    {
+                        headers: {
+                            ...form.getHeaders(),
+                            'Content-Length': form.getLengthSync()
+                        },
+                        maxContentLength: 50 * 1024 * 1024,
+                        maxBodyLength: 50 * 1024 * 1024
+                    }
+                );
+
+                logDebug('Video Handler', 'Upload response', uploadResponse.data);
+
+                if (!uploadResponse.data.success) {
+                    throw new Error(uploadResponse.data.message || 'Failed to upload video');
+                }
+
+                // Создаем продукт с видео
+                const newProduct = {
+                    name: userState[chatId].productName,
+                    description: userState[chatId].productDescription,
+                    price: userState[chatId].productPrice,
+                    category: userState[chatId].productCategory,
+                    image: userState[chatId].productImage,
+                    video: uploadResponse.data.video.filename,
+                    chefId: chatId.toString()
+                };
+
+                logDebug('Product Creation', 'Creating product with video', newProduct);
+                const productResponse = await axios.post('http://api:5000/api/products', newProduct);
+                logDebug('Product Creation', 'Product created successfully', productResponse.data);
+
+                await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен с видео! 🎥`);
+                setTimeout(async () => {
+                    await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
+                }, 2000);
+                delete userState[chatId];
+                return;
+
+            } catch (error) {
+                logDebug('Video Handler', 'Error processing video', error);
+                const errorMessage = error.response?.data?.message || error.message;
+                await sendMessageWithDelete(chatId,
+                    `Ошибка при обработке видео: ${errorMessage}\n` +
+                    'Пожалуйста, попробуйте загрузить видео меньшего размера (максимум 50MB) или напишите "пропустить":'
+                );
+                return;
+            }
+        } else {
+            // Если получено сообщение другого типа
+            logDebug('Video Handler', 'Received non-video message', {
+                messageType: messageDebug.type,
+                contentTypes: messageDebug.contentTypes
+            });
+            await sendMessageWithDelete(chatId,
+                'Пожалуйста, отправьте видео файл или напишите "пропустить".\n' +
+                'Видео можно отправить как видеосообщение или как файл.'
+            );
+            return;
+        }
+    }
+
     else if (userState[chatId].step === 'add_news_title') {
         userState[chatId].newsTitle = text;
         userState[chatId].step = 'add_news_content';

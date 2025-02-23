@@ -41,6 +41,8 @@ router.get('/', productController.getAllProducts);
  *                 type: string
  *               image:
  *                 type: string
+ *               video:
+ *                 type: string
  *               stock:
  *                 type: number
  *               tags:
@@ -97,6 +99,8 @@ router.post('/', productController.createProduct);
  *                   type: string
  *                 image:
  *                   type: string
+ *                 video:
+ *                   type: string
  *                 stock:
  *                   type: number
  *                 tags:
@@ -148,6 +152,8 @@ router.get('/:id', productController.getProductById);
  *               category:
  *                 type: string
  *               image:
+ *                 type: string
+ *               video:
  *                 type: string
  *               stock:
  *                 type: number

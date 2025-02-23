@@ -13,7 +13,7 @@ exports.getAllProducts = async (req, res) => {
 
 // Создание нового продукта
 exports.createProduct = async (req, res) => {
-    const { name, description, price, category, image, stock, tags, status, expirationDate, externalId, chefId } = req.body;
+    const { name, description, price, category, image, video, stock, tags, status, expirationDate, externalId, chefId } = req.body;
 
     try {
         const newProduct = new Product({
@@ -22,6 +22,7 @@ exports.createProduct = async (req, res) => {
             price,
             category,
             image,
+            video,
             stock,
             tags,
             status,
@@ -59,7 +60,7 @@ exports.getProductById = async (req, res) => {
 // Обновление продукта
 exports.updateProduct = async (req, res) => {
     const { id } = req.params;
-    const { name, description, price, category, image, stock, tags, status, expirationDate, externalId, chefId } = req.body;
+    const { name, description, price, category, image, video, stock, tags, status, expirationDate, externalId, chefId } = req.body;
 
     try {
         const product = await Product.findById(id);
@@ -73,6 +74,7 @@ exports.updateProduct = async (req, res) => {
         product.price = price || product.price;
         product.category = category || product.category;
         product.image = image || product.image;
+        product.video = video || product.video;
         product.stock = stock || product.stock;
         product.tags = tags || product.tags;
         product.status = status || product.status;

@@ -1,4 +1,6 @@
 node_modules/
+backend/uploads/*
+!backend/uploads/
 mongo_data/*
 !mongo_data/
 logs/*
