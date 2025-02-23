@@ -25,32 +25,34 @@ services:
 
   api:
     build:
-      context: ./backend  # Путь к папке с ботом
+      context: ./backend
       dockerfile: Dockerfile
     container_name: api_app
     environment:
-      - MONGO_URI=mongodb://root:example@mongo:27017  # Используем контейнер MongoDB
+      - MONGO_URI=mongodb://root:example@mongo:27017
     ports:
       - "5000:5000"
     volumes:
       - ./backend:/app
+      - /app/node_modules
     depends_on:
       - mongo
 
   tg_bot:
     build:
-      context: ./tg_bot  # Путь к папке с ботом
+      context: ./tg_bot
       dockerfile: Dockerfile
     container_name: tg_bot_app
     environment:
-      - TELEGRAM_BOT_TOKEN=7637457882:AAHbeS-f8bNRdN0GKSLwjM1K2NBXFjBpc9g  # Токен для бота, задаем переменную в .env
+      - TELEGRAM_BOT_TOKEN=7637457882:AAHbeS-f8bNRdN0GKSLwjM1K2NBXFjBpc9g
     ports:
-      - "5001:5001"  # Если бот работает на порту 5001
+      - "5001:5001"
     volumes:
       - ./tg_bot:/app
+      - /app/node_modules  # Это позволит сохранить установленные зависимости
     depends_on:
       - mongo
-      - api  # Можно добавить зависимости от API или базы данных, если бот работает с ними
+      - api
 
 volumes:
   mongo_data:
