@@ -259,21 +259,44 @@ bot.on('callback_query', async (callbackQuery) => {
         }
         const order = orderDetails.order || orderDetails;
         console.log('[Order View] Using order object:', order);
-        let detailsText = `Заказ №${order._id}\n`;
-        detailsText += `Статус: ${order.status}\n`;
-        detailsText += `Сумма: ${order.totalAmount} ₽\n`;
-        detailsText += `Адрес доставки: ${order.shippingAddress}\n`;
-        if (order.phone) detailsText += `Телефон: ${order.phone}\n`;
-        if (order.description) detailsText += `Описание: ${order.description}\n`;
-        if (order.paymentStatus) detailsText += `Статус оплаты: ${order.paymentStatus}\n`;
-        if (order.paymentMethod) detailsText += `Метод оплаты: ${order.paymentMethod}\n`;
-        if (order.contactEmail) detailsText += `Email: ${order.contactEmail}\n`;
-        if (order.contactPhone) detailsText += `Контактный телефон: ${order.contactPhone}\n`;
+
+        // Форматируем дату создания
+        const orderDate = order.createdAt ? new Date(order.createdAt).toLocaleString('ru-RU', {
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+        }) : 'Дата не указана';
+
+        let detailsText = `📅 Дата заказа: ${orderDate}\n`;
+        detailsText += `🔢 Заказ №${order._id}\n`;
+        detailsText += `📊 Статус: ${order.status}\n`;
+        detailsText += `💰 Сумма: ${order.totalAmount} ₽\n`;
+        detailsText += `📍 Адрес доставки: ${order.shippingAddress}\n`;
+        if (order.phone) detailsText += `📱 Телефон: ${order.phone}\n`;
+        if (order.description) detailsText += `💭 Описание: ${order.description}\n`;
+        if (order.paymentStatus) detailsText += `💳 Статус оплаты: ${order.paymentStatus}\n`;
+        if (order.paymentMethod) detailsText += `💵 Метод оплаты: ${order.paymentMethod}\n`;
+        if (order.contactEmail) detailsText += `📧 Email: ${order.contactEmail}\n`;
+        if (order.contactPhone) detailsText += `📞 Контактный телефон: ${order.contactPhone}\n`;
+
         if (order.statusHistory && order.statusHistory.length > 0) {
-            detailsText += `Дата создания: ${new Date(order.statusHistory[0].timestamp).toLocaleString()}\n`;
+            detailsText += `\n📝 История статусов:\n`;
+            order.statusHistory.forEach((hist, index) => {
+                const histDate = new Date(hist.timestamp).toLocaleString('ru-RU', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+                detailsText += `   ${index + 1}. ${hist.status} (${histDate})\n`;
+            });
         }
+
         if (order.products && order.products.length > 0) {
-            detailsText += `\nСостав заказа:\n`;
+            detailsText += `\n📦 Состав заказа:\n`;
             try {
                 const productPromises = order.products.map(prod =>
                     axios.get(`http://api:5000/api/products/${prod.productId}`)
@@ -290,17 +313,22 @@ bot.on('callback_query', async (callbackQuery) => {
                 );
                 const productDetails = await Promise.all(productPromises);
                 productDetails.forEach((p, index) => {
-                    detailsText += `  ${index + 1}. ${p.name} x${p.quantity} — ${p.price} ₽ за шт, Итого: ${p.price * p.quantity} ₽\n`;
+                    detailsText += `\n   🔸 ${index + 1}. ${p.name}\n`;
+                    detailsText += `      📊 Количество: ${p.quantity} шт\n`;
+                    detailsText += `      💵 Цена за шт: ${p.price} ₽\n`;
+                    detailsText += `      💰 Итого: ${p.price * p.quantity} ₽\n`;
                 });
             } catch (error) {
                 console.error('Error fetching product details:', error);
             }
         }
+
         if (order.deliveryInfo && order.deliveryInfo.deliveryInstructions) {
-            detailsText += `\nИнструкция по доставке: ${order.deliveryInfo.deliveryInstructions}\n`;
+            detailsText += `\n🚚 Инструкция по доставке:\n${order.deliveryInfo.deliveryInstructions}\n`;
         }
-        // For "My orders" show only status update buttons.
-        // For regular orders, include a "Cancel Order" button.
+
+        // Для "My orders" показываем только кнопки обновления статуса
+        // Для обычных заказов добавляем кнопку "Отменить заказ"
         if (userState[chatId] && userState[chatId].orderListType === 'my_orders') {
             const statuses = [
                 'Новый',
@@ -327,10 +355,9 @@ bot.on('callback_query', async (callbackQuery) => {
             const inlineKeyboard = { inline_keyboard: inlineStatusButtons };
             await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
         } else {
-            // Regular orders: add "Cancel Order" and "⬅️ Back" buttons.
             const inlineKeyboard = {
                 inline_keyboard: [
-                    [{ text: 'Отменить заказ', callback_data: `cancel_order_${order._id}` }],
+                    [{ text: '❌ Отменить заказ', callback_data: `cancel_order_${order._id}` }],
                     [{ text: '⬅️ Назад', callback_data: 'orders_list' }]
                 ]
             };
@@ -1121,23 +1148,56 @@ async function displayOrdersList(chatId) {
         let orders = [];
         if (Array.isArray(response.data)) orders = response.data;
         else if (response.data.orders) orders = response.data.orders;
+
         if (orders.length === 0) {
             await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
             return;
         }
+
         userState[chatId] = userState[chatId] || {};
         userState[chatId].orderListType = 'all';
         console.log('[Orders List] Returned orders:', JSON.stringify(orders, null, 2));
+
+        // Сортируем заказы по дате создания (самые новые сверху)
+        orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        let messageText = '📋 Ваши заказы:\n\n';
+        messageText += '🔍 Выберите заказ для просмотра деталей:\n';
+
         const inlineKeyboard = orders.map(order => {
             const orderIdShort = order._id.slice(-4);
+            const orderDate = new Date(order.createdAt).toLocaleString('ru-RU', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            // Добавляем эмодзи в зависимости от статуса
+            let statusEmoji = '📝'; // По умолчанию
+            switch(order.status.toLowerCase()) {
+                case 'новый': statusEmoji = '🆕'; break;
+                case 'принят в работу': statusEmoji = '👨‍🍳'; break;
+                case 'готовится': statusEmoji = '🔄'; break;
+                case 'готов к отправке': statusEmoji = '📦'; break;
+                case 'в доставке': statusEmoji = '🚚'; break;
+                case 'доставлен': statusEmoji = '✅'; break;
+                case 'завершён': statusEmoji = '🎉'; break;
+                case 'отменён': statusEmoji = '❌'; break;
+                case 'возврат': statusEmoji = '↩️'; break;
+            }
+
             return [{
-                text: `№${orderIdShort} • ${order.totalAmount} ₽ • ${order.status}`,
+                text: `${orderDate} • №${orderIdShort} • ${order.totalAmount}₽ • ${statusEmoji}${order.status}`,
                 callback_data: `view_order_${order._id}`
             }];
         });
+
         inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
         const keyboardOptions = { inline_keyboard: inlineKeyboard };
-        await sendMessageWithDelete(chatId, 'Ваши заказы:', { reply_markup: JSON.stringify(keyboardOptions) });
+
+        await sendMessageWithDelete(chatId, messageText, { reply_markup: JSON.stringify(keyboardOptions) });
     } catch (error) {
         console.error('[Orders List] Error fetching orders:', error.message);
         await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка заказов.');
@@ -1169,22 +1229,50 @@ async function displayMyOrders(chatId) {
         userState[chatId] = userState[chatId] || {};
         userState[chatId].orderListType = 'my_orders';
 
+        // Сортируем заказы по дате создания (самые новые сверху)
+        orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+        let messageText = '👨‍🍳 Заказы, где вы указаны как повар:\n\n';
+        messageText += '🔍 Выберите заказ для просмотра деталей и управления статусом:\n';
+
         // Создаем клавиатуру с заказами
         const inlineKeyboard = orders.map(order => {
             const orderIdShort = order._id.slice(-4);
+            const orderDate = new Date(order.createdAt).toLocaleString('ru-RU', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            // Добавляем эмодзи в зависимости от статуса
+            let statusEmoji = '📝'; // По умолчанию
+            switch(order.status.toLowerCase()) {
+                case 'новый': statusEmoji = '🆕'; break;
+                case 'принят в работу': statusEmoji = '👨‍🍳'; break;
+                case 'готовится': statusEmoji = '🔄'; break;
+                case 'готов к отправке': statusEmoji = '📦'; break;
+                case 'в доставке': statusEmoji = '🚚'; break;
+                case 'доставлен': statusEmoji = '✅'; break;
+                case 'завершён': statusEmoji = '🎉'; break;
+                case 'отменён': statusEmoji = '❌'; break;
+                case 'возврат': statusEmoji = '↩️'; break;
+            }
+
             return [{
-                text: `№${orderIdShort} • ${order.totalAmount} ₽ • ${order.status}`,
+                text: `${orderDate} • №${orderIdShort} • ${order.totalAmount}₽ • ${statusEmoji}${order.status}`,
                 callback_data: `view_order_${order._id}`
             }];
         });
 
-        inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
+        inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_management' }]);
 
         const keyboardOptions = { inline_keyboard: inlineKeyboard };
 
         await sendMessageWithDelete(
             chatId,
-            'Заказы, где вы указаны как повар:',
+            messageText,
             { reply_markup: JSON.stringify(keyboardOptions) }
         );
 
@@ -1196,8 +1284,6 @@ async function displayMyOrders(chatId) {
         await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка заказов.');
     }
 }
-
-
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
