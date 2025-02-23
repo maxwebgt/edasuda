@@ -490,27 +490,29 @@ bot.on('callback_query', async (callbackQuery) => {
                 return;
             }
 
-            let expensesList = 'Ваши расходы:\n\n';
-            expenses.forEach((expense, index) => {
-                expensesList += `${index + 1}. ${expense.title}\n`;
-                expensesList += `   💰 Сумма: ${expense.amount} ₽\n`;
-                expensesList += `   📁 Категория: ${expense.category}\n`;
-                expensesList += `   📅 Дата: ${new Date(expense.date).toLocaleDateString()}\n`;
-                if (expense.description) {
-                    expensesList += `   📝 Описание: ${expense.description}\n`;
-                }
-                expensesList += '\n';
-            });
+            // Подсчитываем общую сумму расходов
+            const totalAmount = expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
 
-            const backButton = {
+            let expensesList = 'Ваши расходы:\n\n';
+            expensesList += `💵 Общая сумма расходов: ${totalAmount} ₽\n\n`;
+            expensesList += 'Нажмите на расход для подробной информации:\n';
+
+            // Создаем клавиатуру, где каждый расход - отдельная кнопка
+            const inlineKeyboard = expenses.map(expense => ([{
+                text: `${expense.title} - ${expense.amount} ₽`,
+                callback_data: `view_expense_${expense._id}`
+            }]));
+
+            // Добавляем кнопку "Назад"
+            inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'expenses_menu' }]);
+
+            const keyboard = {
                 reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [{ text: '⬅️ Назад', callback_data: 'expenses_menu' }]
-                    ]
+                    inline_keyboard: inlineKeyboard
                 })
             };
 
-            await sendMessageWithDelete(chatId, expensesList, backButton);
+            await sendMessageWithDelete(chatId, expensesList, keyboard);
         } catch (error) {
             console.error('Error fetching expenses:', error);
             await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка расходов.');
@@ -665,6 +667,107 @@ bot.on('callback_query', async (callbackQuery) => {
         } catch (error) {
             console.error('Error fetching products:', error);
             await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка продуктов.');
+        }
+    }
+    else if (data.startsWith('view_expense_')) {
+        try {
+            const expenseId = data.split('view_expense_')[1];
+            const response = await axios.get(`http://api:5000/api/expenses/${expenseId}`);
+            const expense = response.data;
+
+            let expenseDetails = `📋 Детали расхода:\n\n`;
+            expenseDetails += `🏷 Название: ${expense.title}\n`;
+            expenseDetails += `💰 Сумма: ${expense.amount} ₽\n`;
+            expenseDetails += `📁 Категория: ${expense.category}\n`;
+            expenseDetails += `📅 Дата: ${new Date(expense.date).toLocaleDateString()}\n`;
+            if (expense.description) {
+                expenseDetails += `📝 Описание: ${expense.description}\n`;
+            }
+
+            const keyboard = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [{ text: '🗑 Удалить расход', callback_data: `delete_expense_${expenseId}` }],
+                        [{ text: '⬅️ Назад к списку', callback_data: 'view_expenses' }]
+                    ]
+                })
+            };
+
+            await sendMessageWithDelete(chatId, expenseDetails, keyboard);
+        } catch (error) {
+            console.error('Error fetching expense details:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей расхода.');
+        }
+    }
+// Добавляем обработчик для удаления расхода
+    else if (data.startsWith('delete_expense_')) {
+        try {
+            const expenseId = data.split('delete_expense_')[1];
+
+            // Запрашиваем подтверждение удаления
+            const confirmKeyboard = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [
+                            { text: '✅ Да, удалить', callback_data: `confirm_delete_expense_${expenseId}` },
+                            { text: '❌ Отмена', callback_data: `view_expense_${expenseId}` }
+                        ]
+                    ]
+                })
+            };
+
+            await sendMessageWithDelete(chatId, 'Вы уверены, что хотите удалить этот расход?', confirmKeyboard);
+        } catch (error) {
+            console.error('Error preparing expense deletion:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при подготовке к удалению расхода.');
+        }
+    }
+// Добавляем обработчик для подтверждения удаления
+    else if (data.startsWith('confirm_delete_expense_')) {
+        try {
+            const expenseId = data.split('confirm_delete_expense_')[1];
+            await axios.delete(`http://api:5000/api/expenses/${expenseId}`);
+
+            await sendMessageWithDelete(chatId, 'Расход успешно удален!');
+
+            // Возвращаемся к списку расходов через небольшую задержку
+            setTimeout(async () => {
+                try {
+                    const response = await axios.get(`http://api:5000/api/expenses/chef/${chatId}`);
+                    const expenses = response.data;
+
+                    if (expenses.length === 0) {
+                        await sendMessageWithDelete(chatId, 'У вас больше нет расходов.');
+                        return;
+                    }
+
+                    // Повторно вызываем отображение списка расходов
+                    const totalAmount = expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
+                    let expensesList = 'Ваши расходы:\n\n';
+                    expensesList += `💵 Общая сумма расходов: ${totalAmount} ₽\n\n`;
+                    expensesList += 'Нажмите на расход для подробной информации:\n';
+
+                    const inlineKeyboard = expenses.map(expense => ([{
+                        text: `${expense.title} - ${expense.amount} ₽`,
+                        callback_data: `view_expense_${expense._id}`
+                    }]));
+                    inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'expenses_menu' }]);
+
+                    const keyboard = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: inlineKeyboard
+                        })
+                    };
+
+                    await sendMessageWithDelete(chatId, expensesList, keyboard);
+                } catch (error) {
+                    console.error('Error refreshing expenses list:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при обновлении списка расходов.');
+                }
+            }, 1000);
+        } catch (error) {
+            console.error('Error deleting expense:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении расхода.');
         }
     }
     else if (data.startsWith('product_')) {
