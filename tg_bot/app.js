@@ -774,10 +774,26 @@ bot.on('callback_query', async (callbackQuery) => {
                         };
                     }
 
-                    // Берем все продукты из заказа, так как заказ уже принадлежит повару
-                    const orderIncome = order.products.reduce((sum, product) => {
+                    // Получаем информацию о продуктах с их названиями
+                    const productsWithDetails = await Promise.all(order.products.map(async (product) => {
+                        try {
+                            const productResponse = await axios.get(`http://api:5000/api/products/${product.productId}`);
+                            return {
+                                ...product,
+                                name: productResponse.data.name // Добавляем название продукта
+                            };
+                        } catch (err) {
+                            console.error(`[Income] Ошибка получения информации о продукте ${product.productId}:`, err.message);
+                            return {
+                                ...product,
+                                name: 'Неизвестный продукт'
+                            };
+                        }
+                    }));
+
+                    const orderIncome = productsWithDetails.reduce((sum, product) => {
                         const productTotal = product.price * product.quantity;
-                        console.log(`[Income] Доход с продукта: ${productTotal} (цена: ${product.price}, количество: ${product.quantity})`);
+                        console.log(`[Income] Доход с продукта ${product.name}: ${productTotal} (цена: ${product.price}, количество: ${product.quantity})`);
                         return sum + productTotal;
                     }, 0);
 
@@ -787,7 +803,7 @@ bot.on('callback_query', async (callbackQuery) => {
                         ordersByMonth[monthKey].orders.push({
                             id: order._id,
                             date: date.toLocaleDateString('ru-RU'),
-                            products: order.products,
+                            products: productsWithDetails, // Теперь здесь есть названия продуктов
                             total: orderIncome,
                             status: order.status
                         });
@@ -812,17 +828,15 @@ bot.on('callback_query', async (callbackQuery) => {
 
                 if (data.orders.length > 0) {
                     incomeMessage += `\n📅 ${monthName} ${year}\n`;
-                    incomeMessage += `└─ Доход за месяц: ${data.total} ₽\n`;
+                    incomeMessage += `└─ 💰 Доход за месяц: ${data.total} ₽\n`;
 
                     for (const order of data.orders) {
                         incomeMessage += `\n🔹 Заказ №${order.id.slice(-4)} от ${order.date}\n`;
                         incomeMessage += `📊 Статус: ${order.status}\n`;
                         for (const product of order.products) {
-                            // Получаем название продукта из API или используем ID, если название недоступно
-                            const productName = product.name || `Продукт ${product.productId}`;
-                            incomeMessage += `   • ${productName} x${product.quantity} — ${product.price} ₽\n`;
+                            incomeMessage += `   • ${product.name} x${product.quantity} — ${product.price} ₽\n`;
                         }
-                        incomeMessage += `   Итого по заказу: ${order.total} ₽\n`;
+                        incomeMessage += `   💵 Итого по заказу: ${order.total} ₽\n`;
                     }
                     incomeMessage += `\n${'─'.repeat(20)}\n`;
                 }
