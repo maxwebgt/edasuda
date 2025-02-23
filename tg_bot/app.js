@@ -162,7 +162,7 @@ async function sendPhotoWithDelete(chatId, photo, options = {}) {
                 console.log(`[sendPhotoWithDelete] Error deleting previous message: ${error.message}`);
             }
         }
-        const replyMarkup = prepareReplyMarkup(options);
+        const replyMarkup = await prepareReplyMarkup(options, chatId); // Добавлен параметр chatId
         const messageOptions = { ...options, reply_markup: replyMarkup };
         console.log(`[sendPhotoWithDelete] Sending photo to chat ${chatId} with options:`, messageOptions);
         const message = await bot.sendPhoto(chatId, photo, messageOptions);
@@ -643,7 +643,12 @@ bot.on('callback_query', async (callbackQuery) => {
         await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
     }
     else if (data === 'buy_product') {
+        console.log(`[buy_product] Starting purchase process for chat ${chatId}`);
+        console.log(`[buy_product] Current user state:`, userState[chatId]);
+
         userState[chatId].step = 'enter_quantity';
+        console.log(`[buy_product] Updated user state:`, userState[chatId]);
+
         await sendMessageWithDelete(chatId, 'Пожалуйста, введите желаемое количество:');
     }
     else if (data === 'add_product') {
@@ -862,13 +867,21 @@ bot.on('message', async (msg) => {
             await sendMessageWithDelete(chatId, 'Произошла ошибка при создании продукта.');
         }
     } else if (userState[chatId].step === 'enter_quantity') {
+        console.log(`[enter_quantity] Processing quantity for chat ${chatId}`);
+        console.log(`[enter_quantity] Current state:`, userState[chatId]);
+
         const quantity = parseInt(text);
         if (isNaN(quantity) || quantity <= 0) {
+            console.log(`[enter_quantity] Invalid quantity entered: ${text}`);
             await sendMessageWithDelete(chatId, 'Пожалуйста, введите корректное количество (положительное число).');
             return;
         }
+
+        console.log(`[enter_quantity] Valid quantity entered: ${quantity}`);
         userState[chatId].quantity = quantity;
         userState[chatId].step = 'enter_description';
+        console.log(`[enter_quantity] Updated state:`, userState[chatId]);
+
         await sendMessageWithDelete(chatId, 'Введите описание к заказу (например, особые пожелания):');
     } else if (userState[chatId].step === 'enter_description') {
         userState[chatId].description = text;
