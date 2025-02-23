@@ -1472,10 +1472,16 @@ bot.on('message', async (msg) => {
 
             console.log('[Order Creation] Creating order with data:', JSON.stringify(order, null, 2));
             const createResponse = await axios.post('http://api:5000/api/orders', order);
-            const createdOrder = createResponse.data;
+            const createdOrder = createResponse.data.order || createResponse.data;
+            console.log('[Order Creation] API response:', JSON.stringify(createResponse.data, null, 2));
+
+            // Проверяем, что у нас есть ID заказа
+            if (!createdOrder._id) {
+                console.error('[Order Creation] No order ID in response:', createResponse.data);
+            }
 
             // Формируем информацию о заказе
-            let orderInfo = `Заказ успешно создан!\n\n` +
+            let orderInfo = `Заказ успешно создан!${createdOrder._id ? ` №${createdOrder._id.slice(-4)}` : ''}\n\n` +
                 `Продукт: ${userState[chatId].selectedProduct.name}\n` +
                 `Количество: ${userState[chatId].quantity}\n` +
                 `Сумма: ${order.totalAmount} ₽\n` +
@@ -1494,26 +1500,25 @@ bot.on('message', async (msg) => {
             // Отправляем подтверждение клиенту
             await sendMessageWithDelete(chatId, orderInfo);
 
-            // Отправляем уведомление повару
+            // Отправляем уведомление повару с гарантированным ID заказа
             if (order.chefId) {
-                try {
-                    const chefNotification =
-                        `🔔 Новый заказ №${createdOrder._id || order._id}!\n\n` +
-                        `📦 Продукт: ${userState[chatId].selectedProduct.name}\n` +
-                        `📊 Количество: ${userState[chatId].quantity}\n` +
-                        `💰 Сумма: ${order.totalAmount} ₽\n\n` +
-                        `📝 Статус: ${order.status}\n` +
-                        `📍 Адрес доставки: ${text}\n` +
-                        `💭 Комментарий: ${order.description || 'Нет'}\n\n` +
-                        `👤 Контакты клиента:\n` +
-                        `📱 Телефон: ${order.contactPhone}\n` +
-                        (order.telegramId ? `📧 Telegram: @${order.telegramId}` : '');
+                const chefNotification =
+                    `🔔 Новый заказ №${createdOrder._id?.slice(-4) || 'Новый'}!\n\n` +
+                    `📦 Продукт: ${userState[chatId].selectedProduct.name}\n` +
+                    `📊 Количество: ${userState[chatId].quantity}\n` +
+                    `💰 Сумма: ${order.totalAmount} ₽\n\n` +
+                    `📝 Статус: ${order.status}\n` +
+                    `📍 Адрес доставки: ${text}\n` +
+                    `💭 Комментарий: ${order.description || 'Нет'}\n\n` +
+                    `👤 Контакты клиента:\n` +
+                    `📱 Телефон: ${order.contactPhone}\n` +
+                    (order.telegramId ? `📧 Telegram: @${order.telegramId}` : '');
 
+                try {
                     await bot.sendMessage(order.chefId, chefNotification);
-                    console.log(`[Order Creation] Chef notification sent to ${order.chefId}`);
+                    console.log(`[Order Creation] Chef notification sent to ${order.chefId} with order ID ${createdOrder._id}`);
                 } catch (notificationError) {
                     console.error('[Order Creation] Error sending chef notification:', notificationError);
-                    // Не прерываем выполнение, так как основной заказ уже создан
                 }
             }
 
@@ -1525,6 +1530,7 @@ bot.on('message', async (msg) => {
 
         } catch (error) {
             console.error('[Order Creation] Error:', error);
+            console.error('[Order Creation] Full error details:', error.response?.data);
             const errorMessage = error.response?.data?.message || 'Произошла ошибка при создании заказа';
             await sendMessageWithDelete(chatId, `Ошибка: ${errorMessage}. Пожалуйста, попробуйте снова.`);
 
