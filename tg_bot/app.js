@@ -468,6 +468,179 @@ bot.on('callback_query', async (callbackQuery) => {
             }
         }
     }
+    else if (data === 'news_menu') {
+        const newsMenu = {
+            reply_markup: JSON.stringify({
+                inline_keyboard: [
+                    [{ text: '📰 Все новости', callback_data: 'view_news' }],
+                    [{ text: '➕ Добавить новость', callback_data: 'add_news' }],
+                    [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                ],
+            }),
+        };
+        await sendMessageWithDelete(chatId, 'Управление новостями:', newsMenu);
+    }
+    else if (data === 'view_news') {
+        try {
+            const response = await axios.get('http://api:5000/api/news');
+            const news = response.data;
+
+            if (news.length === 0) {
+                await sendMessageWithDelete(chatId, 'Пока нет новостей.');
+                return;
+            }
+
+            let newsList = 'Список новостей:\n\n';
+            newsList += 'Нажмите на новость для подробной информации:\n';
+
+            const inlineKeyboard = news.map(item => ([{
+                text: item.title,
+                callback_data: `view_news_${item._id}`
+            }]));
+
+            inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'news_menu' }]);
+
+            const keyboard = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: inlineKeyboard
+                })
+            };
+
+            await sendMessageWithDelete(chatId, newsList, keyboard);
+        } catch (error) {
+            console.error('Error fetching news:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка новостей.');
+        }
+    }
+    else if (data === 'add_news') {
+        userState[chatId] = { step: 'add_news_title' };
+        await sendMessageWithDelete(chatId, 'Введите заголовок новости:');
+    }
+    // Обработчик публикации новости и массовой рассылки
+    else if (data.startsWith('publish_news_')) {
+        try {
+            const newsId = data.split('publish_news_')[1];
+
+            // Получаем данные новости
+            const newsResponse = await axios.get(`http://api:5000/api/news/${newsId}`);
+            const news = newsResponse.data;
+
+            // Получаем список всех пользователей
+            const usersResponse = await axios.get('http://api:5000/api/users');
+            const users = usersResponse.data;
+
+            // Формируем текст рассылки
+            const broadcastMessage = `📢 Новая новость!\n\n` +
+                `📰 ${news.title}\n\n` +
+                `${news.content}\n\n` +
+                `📅 ${new Date().toLocaleDateString()}`;
+
+            // Счетчики для статистики рассылки
+            let successCount = 0;
+            let failCount = 0;
+
+            // Отправляем новость каждому пользователю
+            for (const user of users) {
+                if (user.telegramId) {
+                    try {
+                        await bot.sendMessage(user.telegramId, broadcastMessage);
+                        successCount++;
+                    } catch (error) {
+                        console.error(`Failed to send news to user ${user.telegramId}:`, error);
+                        failCount++;
+                    }
+                    // Небольшая задержка между отправками, чтобы не превысить лимиты Telegram
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+            }
+
+            // Обновляем статус новости
+            await axios.put(`http://api:5000/api/news/${newsId}`, {
+                status: 'published'
+            });
+
+            // Отправляем отчет о рассылке
+            const reportMessage = `✅ Новость успешно опубликована!\n\n` +
+                `📊 Статистика рассылки:\n` +
+                `✓ Успешно отправлено: ${successCount}\n` +
+                `✗ Ошибок отправки: ${failCount}`;
+
+            await sendMessageWithDelete(chatId, reportMessage);
+
+            // Возвращаемся к просмотру новости через небольшую задержку
+            setTimeout(() => {
+                bot.emit('callback_query', {
+                    message: { chat: { id: chatId } },
+                    data: `view_news_${newsId}`
+                });
+            }, 2000);
+
+        } catch (error) {
+            console.error('Error publishing news:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при публикации новости.');
+        }
+    }
+    else if (data.startsWith('view_news_')) {
+        try {
+            const newsId = data.split('view_news_')[1];
+            const response = await axios.get(`http://api:5000/api/news/${newsId}`);
+            const news = response.data;
+
+            let newsDetails = `📰 ${news.title}\n\n`;
+            newsDetails += `${news.content}\n\n`;
+            newsDetails += `📅 Дата: ${new Date(news.createdAt).toLocaleDateString()}\n`;
+            newsDetails += `📊 Статус: ${news.status === 'active' ? 'Черновик' : 'Опубликовано'}\n`;
+
+            const keyboard = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [
+                            news.status === 'active' ?
+                                { text: '📢 Опубликовать', callback_data: `publish_news_${newsId}` } :
+                                { text: '✅ Опубликовано', callback_data: 'no_action' },
+                            { text: '🗑 Удалить', callback_data: `delete_news_${newsId}` }
+                        ],
+                        [{ text: '⬅️ Назад к списку', callback_data: 'view_news' }]
+                    ]
+                })
+            };
+
+            await sendMessageWithDelete(chatId, newsDetails, keyboard);
+        } catch (error) {
+            console.error('Error fetching news details:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей новости.');
+        }
+    }
+    else if (data.startsWith('delete_news_')) {
+        try {
+            const newsId = data.split('delete_news_')[1];
+            const confirmKeyboard = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [
+                            { text: '✅ Да, удалить', callback_data: `confirm_delete_news_${newsId}` },
+                            { text: '❌ Отмена', callback_data: `view_news_${newsId}` }
+                        ]
+                    ]
+                })
+            };
+            await sendMessageWithDelete(chatId, 'Вы уверены, что хотите удалить эту новость?', confirmKeyboard);
+        } catch (error) {
+            console.error('Error preparing news deletion:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при подготовке к удалению новости.');
+        }
+    }
+    else if (data.startsWith('confirm_delete_news_')) {
+        try {
+            const newsId = data.split('confirm_delete_news_')[1];
+            await axios.delete(`http://api:5000/api/news/${newsId}`);
+            await sendMessageWithDelete(chatId, 'Новость успешно удалена!');
+            setTimeout(() => bot.emit('callback_query', { message: { chat: { id: chatId } }, data: 'view_news' }), 1000);
+        } catch (error) {
+            console.error('Error deleting news:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении новости.');
+        }
+    }
     else if (data === 'expenses_menu') {
         const expensesMenu = {
             reply_markup: JSON.stringify({
@@ -969,7 +1142,8 @@ bot.on('message', async (msg) => {
                 reply_markup: JSON.stringify({
                     inline_keyboard: [
                         [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
-                        [{ text: '💰 Расходы', callback_data: 'expenses_menu' }], // Добавляем новую кнопку
+                        [{ text: '💰 Расходы', callback_data: 'expenses_menu' }],
+                        [{ text: '📰 Новости', callback_data: 'news_menu' }], // Добавляем кнопку новостей
                         [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
                         [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
                     ],
@@ -1006,6 +1180,42 @@ bot.on('message', async (msg) => {
         userState[chatId].productCategory = text;
         userState[chatId].step = 'add_product_image';
         await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте изображение продукта:');
+    }
+    else if (userState[chatId].step === 'add_news_title') {
+        userState[chatId].newsTitle = text;
+        userState[chatId].step = 'add_news_content';
+        await sendMessageWithDelete(chatId, 'Введите содержание новости:');
+    }
+    else if (userState[chatId].step === 'add_news_content') {
+        try {
+            const newsData = {
+                title: userState[chatId].newsTitle,
+                content: text,
+                author: chatId.toString(),
+                status: 'active'
+            };
+
+            await axios.post('http://api:5000/api/news', newsData);
+            await sendMessageWithDelete(chatId, '✅ Новость успешно создана!');
+
+            setTimeout(async () => {
+                const newsMenu = {
+                    reply_markup: JSON.stringify({
+                        inline_keyboard: [
+                            [{ text: '📰 Все новости', callback_data: 'view_news' }],
+                            [{ text: '➕ Добавить новость', callback_data: 'add_news' }],
+                            [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                        ],
+                    }),
+                };
+                await sendMessageWithDelete(chatId, 'Управление новостями:', newsMenu);
+            }, 1000);
+
+            delete userState[chatId];
+        } catch (error) {
+            console.error('Error creating news:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при создании новости.');
+        }
     }
     else if (userState[chatId].step === 'add_expense_title') {
         userState[chatId].expenseTitle = text;

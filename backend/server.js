@@ -6,7 +6,8 @@ const productRoutes = require('./routes/productRoutes');
 const orderRoutes = require('./routes/orderRoutes');
 const userRoutes = require('./routes/userRoutes');
 const imageRoutes = require('./routes/imageRoutes');
-const expenseRoutes = require('./routes/expenseRoutes'); // Добавляем маршруты расходов
+const expenseRoutes = require('./routes/expenseRoutes');
+const newsRoutes = require('./routes/newsRoutes'); // Добавляем маршруты новостей
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 
@@ -23,7 +24,7 @@ const swaggerOptions = {
         info: {
             title: 'API for Order Management',
             version: '1.0.0',
-            description: 'This is the API documentation for managing orders and products',
+            description: 'This is the API documentation for managing orders, products, expenses and news',
         },
         servers: [
             {
@@ -53,6 +54,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/images', imageRoutes);
-app.use('/api/expenses', expenseRoutes); // Добавляем маршруты расходов
+app.use('/api/expenses', expenseRoutes);
+app.use('/api/news', newsRoutes); // Добавляем маршруты новостей
 
 app.listen(5000, () => console.log('Server running on port 5000'));
