@@ -105,7 +105,8 @@ exports.createOrder = async (req, res) => {
       shippingAddress,
       deliveryInfo,
       contactEmail,
-      contactPhone
+      contactPhone,
+      chefId // Добавляем chefId
     } = req.body;
 
     // Базовые проверки
@@ -140,7 +141,8 @@ exports.createOrder = async (req, res) => {
       shippingAddress,
       deliveryInfo,
       contactEmail,
-      contactPhone
+      contactPhone,
+      chefId // Добавляем chefId при создании
     });
 
     log('createOrder', 'Order object before save', {
@@ -219,6 +221,34 @@ exports.updateOrder = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Ошибка при обновлении заказа',
+      error: error.message
+    });
+  }
+};
+
+// Получение заказов по chefId
+exports.getOrdersByChefId = async (req, res) => {
+  const { chefId } = req.params;
+  log('getOrdersByChefId', 'Fetching orders', { chefId });
+
+  try {
+    const orders = await Order.find({ chefId: String(chefId) })
+        .sort({ createdAt: -1 });
+
+    log('getOrdersByChefId', `Found ${orders.length} orders`, { chefId });
+
+    res.json({
+      success: true,
+      orders
+    });
+  } catch (error) {
+    log('getOrdersByChefId', 'Error fetching orders', {
+      error: error.message,
+      chefId
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Ошибка при получении заказов',
       error: error.message
     });
   }

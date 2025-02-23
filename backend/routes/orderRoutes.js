@@ -113,6 +113,9 @@ const orderController = require('../controllers/orderController');
  *                 type: string
  *               updatedBy:
  *                 type: string
+ *         chefId:
+ *           type: string
+ *           description: Идентификатор шефа, который ответственен за заказ
  */
 
 /**
@@ -171,6 +174,38 @@ router.get('/', orderController.getAllOrders);
  *         description: Ошибка сервера
  */
 router.get('/client/:clientId', orderController.getOrdersByClientId);
+
+/**
+ * @swagger
+ * /api/orders/chef/{chefId}:
+ *   get:
+ *     summary: Получить заказы по chefId
+ *     tags: [Orders]
+ *     parameters:
+ *       - in: path
+ *         name: chefId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID шефа
+ *     responses:
+ *       200:
+ *         description: Список заказов для указанного chefId
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 orders:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Order'
+ *       500:
+ *         description: Ошибка сервера
+ */
+router.get('/chef/:chefId', orderController.getOrdersByChefId);
 
 /**
  * @swagger

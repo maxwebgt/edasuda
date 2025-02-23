@@ -126,7 +126,11 @@ const orderSchema = new mongoose.Schema({
         },
         comment: String,
         updatedBy: String
-    }]
+    }],
+    chefId: {  // Новое поле для идентификатора шефа
+        type: String,
+        default: null
+    }
 }, {
     timestamps: true
 });

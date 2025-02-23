@@ -290,56 +290,119 @@ bot.on('callback_query', async (callbackQuery) => {
         }
     }
     else if (data.startsWith('update_status::')) {
-        // Format: update_status::<order_id>::<newStatus>
         const parts = data.split("::");
         if (parts.length >= 3) {
             const orderId = parts[1];
             const newStatusCode = parts.slice(2).join("::");
             const userFriendlyStatus = Object.keys(statusMap)
                 .find(key => statusMap[key] === newStatusCode) || newStatusCode;
-            console.log(`[Status Update] Updating order ${orderId} to status "${userFriendlyStatus}" (code: ${newStatusCode})`);
-            try {
-                const updateResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, { status: userFriendlyStatus });
-                console.log(`[Status Update] Response:`, updateResponse.data);
-                await sendMessageWithDelete(chatId, `Статус заказа ${orderId} изменен на "${userFriendlyStatus}"`);
 
-                // Always send notification to the order creator using clientId.
-                const orderResponse = await axios.get(`http://api:5000/api/orders/${orderId}`);
-                const order = orderResponse.data.order || orderResponse.data;
-                if (order.clientId) {
-                    const notificationText = `Ваш заказ №${order._id} обновлен.\nНовый статус: ${userFriendlyStatus}`;
+            console.log(`[Status Update] Processing status update for order ${orderId}`);
+            console.log(`[Status Update] New status: "${userFriendlyStatus}" (code: ${newStatusCode})`);
+            console.log(`[Status Update] Update initiated by chatId: ${chatId}`);
+
+            try {
+                // Получаем текущий заказ до обновления
+                const currentOrderResponse = await axios.get(`http://api:5000/api/orders/${orderId}`);
+                const currentOrder = currentOrderResponse.data.order || currentOrderResponse.data;
+                console.log(`[Status Update] Current order state:`, currentOrder);
+
+                // Обновляем статус заказа
+                const updateResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, {
+                    status: userFriendlyStatus
+                });
+                const updatedOrder = updateResponse.data.order || updateResponse.data;
+                console.log(`[Status Update] Order updated successfully:`, updatedOrder);
+
+                // Получаем информацию о продуктах
+                const productPromises = currentOrder.products.map(async prod => {
                     try {
-                        await bot.sendMessage(order.clientId, notificationText);
-                        console.log(`Уведомление отправлено пользователю с clientId ${order.clientId}`);
-                    } catch (notificationError) {
-                        console.error(`Ошибка отправки уведомления пользователю с clientId ${order.clientId}:`, notificationError.message);
+                        const productResponse = await axios.get(`http://api:5000/api/products/${prod.productId}`);
+                        return {
+                            ...prod,
+                            name: productResponse.data.name,
+                            chefId: productResponse.data.chefId
+                        };
+                    } catch (err) {
+                        console.error(`[Status Update] Error fetching product ${prod.productId}:`, err.message);
+                        return prod;
+                    }
+                });
+
+                const products = await Promise.all(productPromises);
+                console.log(`[Status Update] Products information:`, products);
+
+                // Формируем базовое уведомление
+                const timestamp = new Date().toLocaleString('ru-RU', {
+                    timeZone: 'Europe/Moscow',
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+
+                const baseNotification =
+                    `🔄 Обновление статуса заказа\n\n` +
+                    `📦 Заказ №${orderId}\n` +
+                    `📝 Новый статус: ${userFriendlyStatus}\n` +
+                    `🕒 Время изменения: ${timestamp}\n\n` +
+                    `💰 Сумма заказа: ${updatedOrder.totalAmount} ₽\n` +
+                    `📍 Адрес доставки: ${updatedOrder.shippingAddress}\n\n` +
+                    `📋 Состав заказа:\n`;
+
+                // Добавляем информацию о продуктах
+                const productsInfo = products.map((prod, index) =>
+                    `${index + 1}. ${prod.name || 'Товар'} x${prod.quantity} — ${prod.price} ₽`
+                ).join('\n');
+
+                // Отправляем уведомление клиенту
+                if (updatedOrder.clientId) {
+                    const clientNotification =
+                        `${baseNotification}${productsInfo}\n\n` +
+                        `👨‍🍳 Статус вашего заказа обновлен\n` +
+                        `💬 Комментарий: ${updatedOrder.description || 'Нет'}\n` +
+                        `📞 Контактный телефон повара: ${updatedOrder.chefPhone || 'Не указан'}`;
+
+                    try {
+                        await bot.sendMessage(updatedOrder.clientId, clientNotification);
+                        console.log(`[Status Update] ✅ Client notification sent to ${updatedOrder.clientId}`);
+                    } catch (error) {
+                        console.error(`[Status Update] ❌ Failed to notify client ${updatedOrder.clientId}:`, error.message);
                     }
                 }
 
-                // New functionality: if the order is cancelled ("Отменён"), notify all chefs associated with the order's products.
-                if (userFriendlyStatus === 'Отменён') {
-                    const productNotifications = order.products.map(async (prod) => {
+                // Отправляем уведомление поварам
+                const uniqueChefIds = [...new Set(products.map(p => p.chefId))];
+                console.log(`[Status Update] Found chefs to notify:`, uniqueChefIds);
+
+                for (const chefId of uniqueChefIds) {
+                    if (chefId) {
+                        const chefNotification =
+                            `${baseNotification}${productsInfo}\n\n` +
+                            `👤 Статус заказа обновлен\n` +
+                            `💬 Комментарий к заказу: ${updatedOrder.description || 'Нет'}\n` +
+                            `📱 Контакты клиента:\n` +
+                            `   Телефон: ${updatedOrder.contactPhone || 'Не указан'}\n` +
+                            `   Telegram: ${updatedOrder.telegramId ? '@' + updatedOrder.telegramId : 'Не указан'}`;
+
                         try {
-                            const prodRes = await axios.get(`http://api:5000/api/products/${prod.productId}`);
-                            const productData = prodRes.data;
-                            if (productData.chefId) {
-                                const chefNotification = `Заказ №${order._id} был отменён. Пожалуйста, проверьте информацию по вашему продукту.`;
-                                try {
-                                    await bot.sendMessage(productData.chefId, chefNotification);
-                                    console.log(`Уведомление отправлено повару с chefId ${productData.chefId}`);
-                                } catch (e) {
-                                    console.error(`Ошибка отправки уведомления повару с chefId ${productData.chefId}:`, e.message);
-                                }
-                            }
-                        } catch (err) {
-                            console.error('Error fetching product details for notifications:', err.message);
+                            await bot.sendMessage(chefId, chefNotification);
+                            console.log(`[Status Update] ✅ Chef notification sent to ${chefId}`);
+                        } catch (error) {
+                            console.error(`[Status Update] ❌ Failed to notify chef ${chefId}:`, error.message);
                         }
-                    });
-                    await Promise.all(productNotifications);
+                    }
                 }
 
+                // Подтверждение в чат, где было произведено изменение
+                await sendMessageWithDelete(chatId, `Статус заказа ${orderId} изменен на "${userFriendlyStatus}"`);
+
             } catch (error) {
-                console.error(`[Status Update] Error updating order ${orderId}:`, error.message);
+                console.error(`[Status Update] Error:`, error.message);
+                if (error.response?.data) {
+                    console.error(`[Status Update] API Error:`, error.response.data);
+                }
                 await sendMessageWithDelete(chatId, `Ошибка обновления статуса заказа ${orderId}`);
             }
         }
@@ -435,7 +498,6 @@ bot.on('callback_query', async (callbackQuery) => {
     }
 });
 
-
 // Function to display all orders (non-filtered). Sets orderListType to "all"
 async function displayOrdersList(chatId) {
     const ordersUrl = `http://api:5000/api/orders/client/${chatId}`;
@@ -470,51 +532,57 @@ async function displayOrdersList(chatId) {
 
 // Function to display "my orders" (orders with at least one product where chefId equals current chatId).
 // Sets orderListType to "my_orders"
+// Функция для отображения "моих заказов" (заказы, в которых chefId равен текущему chatId)
+// Function to display "my orders" (orders where chefId equals current chatId)
 async function displayMyOrders(chatId) {
-    const ordersUrl = `http://api:5000/api/orders/client/${chatId}`;
-    console.log(`[My Orders] Requesting orders from URL: ${ordersUrl}`);
+    console.log(`[My Orders] Starting displayMyOrders for chatId: ${chatId}`);
+    const ordersUrl = `http://api:5000/api/orders/chef/${chatId}`;
+
     try {
+        console.log(`[My Orders] Requesting orders from URL: ${ordersUrl}`);
         const response = await axios.get(ordersUrl);
-        let orders = [];
-        if (Array.isArray(response.data)) orders = response.data;
-        else if (response.data.orders) orders = response.data.orders;
+
+        let orders = Array.isArray(response.data) ? response.data :
+            (response.data.orders || []);
+
+        console.log(`[My Orders] Retrieved ${orders.length} orders for chef ${chatId}`);
+
         if (orders.length === 0) {
-            await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
+            await sendMessageWithDelete(chatId, 'У вас пока нет заказов, где вы указаны как повар.');
             return;
         }
-        const filteredOrders = [];
-        for (const order of orders) {
-            const productDetailsPromises = order.products.map(prod =>
-                axios.get(`http://api:5000/api/products/${prod.productId}`)
-                    .then(res => res.data)
-                    .catch(err => null)
-            );
-            const productDetails = await Promise.all(productDetailsPromises);
-            const hasMatchingProduct = productDetails.some(prod => prod && prod.chefId && prod.chefId.toString() === chatId.toString());
-            if (hasMatchingProduct) filteredOrders.push(order);
-        }
-        if (filteredOrders.length === 0) {
-            await sendMessageWithDelete(chatId, 'У вас пока нет заказов с продуктами, привязанными к вам.');
-            return;
-        }
+
         userState[chatId] = userState[chatId] || {};
         userState[chatId].orderListType = 'my_orders';
-        console.log('[My Orders] Filtered orders:', JSON.stringify(filteredOrders, null, 2));
-        const inlineKeyboard = filteredOrders.map(order => {
+
+        // Создаем клавиатуру с заказами
+        const inlineKeyboard = orders.map(order => {
             const orderIdShort = order._id.slice(-4);
             return [{
                 text: `№${orderIdShort} • ${order.totalAmount} ₽ • ${order.status}`,
                 callback_data: `view_order_${order._id}`
             }];
         });
+
         inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
+
         const keyboardOptions = { inline_keyboard: inlineKeyboard };
-        await sendMessageWithDelete(chatId, 'Мои заказы:', { reply_markup: JSON.stringify(keyboardOptions) });
+
+        await sendMessageWithDelete(
+            chatId,
+            'Заказы, где вы указаны как повар:',
+            { reply_markup: JSON.stringify(keyboardOptions) }
+        );
+
     } catch (error) {
-        console.error('[My Orders] Error fetching orders:', error.message);
-        await sendMessageWithDelete(chatId, 'Произошла ошибка при получении вашего списка заказов.');
+        console.error('[My Orders] Error fetching orders:', error);
+        if (error.response) {
+            console.error('[My Orders] Error response:', error.response.data);
+        }
+        await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка заказов.');
     }
 }
+
 
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
@@ -667,24 +735,68 @@ bot.on('message', async (msg) => {
                 deliveryInfo: { type: 'Курьер', trackingNumber: null, courierName: null, courierPhone: null, estimatedDeliveryDate: null, actualDeliveryDate: null, deliveryInstructions: userState[chatId].description },
                 contactEmail: `${chatId}@telegram.com`,
                 contactPhone: userState[chatId].phone,
-                statusHistory: [{ status: 'Новый', timestamp: new Date(), comment: 'Заказ создан через Telegram бота', updatedBy: 'system' }]
+                statusHistory: [{ status: 'Новый', timestamp: new Date(), comment: 'Заказ создан через Telegram бота', updatedBy: 'system' }],
+                chefId: userState[chatId].selectedProduct.chefId
             };
-            console.log('Creating order with data:', JSON.stringify(order, null, 2));
-            await axios.post('http://api:5000/api/orders', order);
-            let orderInfo = `Заказ успешно создан!\n\nПродукт: ${userState[chatId].selectedProduct.name}\nКоличество: ${userState[chatId].quantity}\nСумма: ${order.totalAmount} ₽\nТелефон: ${userState[chatId].phone}\nАдрес доставки: ${text}\nОписание: ${userState[chatId].description}\n\nСтатус: ${order.status}\nОплата: ${order.paymentStatus}\n\nСостав заказа:\n`;
+
+            console.log('[Order Creation] Creating order with data:', JSON.stringify(order, null, 2));
+            const createResponse = await axios.post('http://api:5000/api/orders', order);
+            const createdOrder = createResponse.data;
+
+            // Формируем информацию о заказе
+            let orderInfo = `Заказ успешно создан!\n\n` +
+                `Продукт: ${userState[chatId].selectedProduct.name}\n` +
+                `Количество: ${userState[chatId].quantity}\n` +
+                `Сумма: ${order.totalAmount} ₽\n` +
+                `Телефон: ${userState[chatId].phone}\n` +
+                `Адрес доставки: ${text}\n` +
+                `Описание: ${userState[chatId].description}\n\n` +
+                `Статус: ${order.status}\n` +
+                `Оплата: ${order.paymentStatus}\n\n` +
+                `Состав заказа:\n`;
+
             order.products.forEach((prod, index) => {
                 const prodName = prod.name || prod.productName || 'Неизвестный продукт';
                 orderInfo += `  ${index + 1}. ${prodName} x ${prod.quantity} — ${prod.price} ₽ за шт, Итого: ${prod.price * prod.quantity} ₽\n`;
             });
+
+            // Отправляем подтверждение клиенту
             await sendMessageWithDelete(chatId, orderInfo);
+
+            // Отправляем уведомление повару
+            if (order.chefId) {
+                try {
+                    const chefNotification =
+                        `🔔 Новый заказ №${createdOrder._id || order._id}!\n\n` +
+                        `📦 Продукт: ${userState[chatId].selectedProduct.name}\n` +
+                        `📊 Количество: ${userState[chatId].quantity}\n` +
+                        `💰 Сумма: ${order.totalAmount} ₽\n\n` +
+                        `📝 Статус: ${order.status}\n` +
+                        `📍 Адрес доставки: ${text}\n` +
+                        `💭 Комментарий: ${order.description || 'Нет'}\n\n` +
+                        `👤 Контакты клиента:\n` +
+                        `📱 Телефон: ${order.contactPhone}\n` +
+                        (order.telegramId ? `📧 Telegram: @${order.telegramId}` : '');
+
+                    await bot.sendMessage(order.chefId, chefNotification);
+                    console.log(`[Order Creation] Chef notification sent to ${order.chefId}`);
+                } catch (notificationError) {
+                    console.error('[Order Creation] Error sending chef notification:', notificationError);
+                    // Не прерываем выполнение, так как основной заказ уже создан
+                }
+            }
+
+            // Очищаем состояние и показываем главное меню
             setTimeout(async () => {
                 await sendMessageWithDelete(chatId, 'Что желаете сделать дальше?', mainMenu);
             }, 2000);
             delete userState[chatId];
+
         } catch (error) {
-            console.error('Error creating order:', error);
+            console.error('[Order Creation] Error:', error);
             const errorMessage = error.response?.data?.message || 'Произошла ошибка при создании заказа';
             await sendMessageWithDelete(chatId, `Ошибка: ${errorMessage}. Пожалуйста, попробуйте снова.`);
+
             setTimeout(async () => {
                 await sendMessageWithDelete(chatId, 'Что желаете сделать дальше?', mainMenu);
             }, 2000);
