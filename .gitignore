@@ -1,7 +1,6 @@
 node_modules/
-# Игнорировать все содержимое в mongo_data
 mongo_data/*
-
-# Но не игнорировать саму папку mongo_data
 !mongo_data/
+logs/*
+!logs/
 .idea/
