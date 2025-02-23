@@ -10,6 +10,18 @@ services:
       - "27017:27017"
     volumes:
       - ./mongo_data:/data/db
+      - ./logs:/var/log/mongodb
+    command: >
+      mongod
+      --logpath /var/log/mongodb/mongod.log
+      --logappend
+      --quiet
+      --bind_ip_all
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   mongo-express:
     image: mongo-express:latest
