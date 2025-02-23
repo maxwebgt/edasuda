@@ -4,7 +4,8 @@
   "description": "Telegram bot for handling orders and products",
   "main": "app.js",
   "scripts": {
-    "start": "nodemon --legacy-watch app.js"
+    "dev": "nodemon -L app.js",
+    "start": "node app.js"
   },
   "dependencies": {
     "axios": "^0.21.1",

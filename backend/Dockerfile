@@ -19,4 +19,4 @@ COPY . .
 EXPOSE 5000
 
 # Запускаем приложение через nodemon
-CMD ["nodemon", "server.js"]
+CMD ["npm", "run", "dev"]

@@ -33,7 +33,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./backend:/app
+      - ./backend:/app:cached
       - /app/node_modules
     depends_on:
       - mongo

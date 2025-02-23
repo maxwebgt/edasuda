@@ -3,7 +3,8 @@
     "server.js",
     "./controllers",
     "models",
-    "routes"
+    "routes",
+    "public"
   ],
-  "ext": "js,json"
+  "ext": "js,json,html"
 }

@@ -18,4 +18,4 @@ RUN npm install -g nodemon
 EXPOSE 5001
 
 # Запускаем бота с помощью nodemon
-CMD ["npm", "start"]
+CMD ["npm", "run", "dev"]
