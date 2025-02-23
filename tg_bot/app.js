@@ -468,6 +468,72 @@ bot.on('callback_query', async (callbackQuery) => {
             }
         }
     }
+    else if (data === 'expenses_menu') {
+        const expensesMenu = {
+            reply_markup: JSON.stringify({
+                inline_keyboard: [
+                    [{ text: '📊 Все расходы', callback_data: 'view_expenses' }],
+                    [{ text: '➕ Добавить расход', callback_data: 'add_expense' }],
+                    [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                ],
+            }),
+        };
+        await sendMessageWithDelete(chatId, 'Управление расходами:', expensesMenu);
+    }
+    else if (data === 'view_expenses') {
+        try {
+            const response = await axios.get(`http://api:5000/api/expenses/chef/${chatId}`);
+            const expenses = response.data;
+
+            if (expenses.length === 0) {
+                await sendMessageWithDelete(chatId, 'У вас пока нет расходов.');
+                return;
+            }
+
+            let expensesList = 'Ваши расходы:\n\n';
+            expenses.forEach((expense, index) => {
+                expensesList += `${index + 1}. ${expense.title}\n`;
+                expensesList += `   💰 Сумма: ${expense.amount} ₽\n`;
+                expensesList += `   📁 Категория: ${expense.category}\n`;
+                expensesList += `   📅 Дата: ${new Date(expense.date).toLocaleDateString()}\n`;
+                if (expense.description) {
+                    expensesList += `   📝 Описание: ${expense.description}\n`;
+                }
+                expensesList += '\n';
+            });
+
+            const backButton = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [{ text: '⬅️ Назад', callback_data: 'expenses_menu' }]
+                    ]
+                })
+            };
+
+            await sendMessageWithDelete(chatId, expensesList, backButton);
+        } catch (error) {
+            console.error('Error fetching expenses:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка расходов.');
+        }
+    }
+    else if (data === 'add_expense') {
+        userState[chatId] = { step: 'add_expense_title' };
+        await sendMessageWithDelete(chatId, 'Введите название расхода:');
+    }
+    else if (data === 'back_to_management') {
+        // Возврат к меню управления
+        const managementMenu = {
+            reply_markup: JSON.stringify({
+                inline_keyboard: [
+                    [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
+                    [{ text: '💰 Расходы', callback_data: 'expenses_menu' }],
+                    [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
+                    [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
+                ],
+            }),
+        };
+        await sendMessageWithDelete(chatId, 'Панель управления:', managementMenu);
+    }
     else if (data === 'orders_list') {
         await displayOrdersList(chatId);
     }
@@ -800,6 +866,7 @@ bot.on('message', async (msg) => {
                 reply_markup: JSON.stringify({
                     inline_keyboard: [
                         [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
+                        [{ text: '💰 Расходы', callback_data: 'expenses_menu' }], // Добавляем новую кнопку
                         [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
                         [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
                     ],
@@ -836,7 +903,63 @@ bot.on('message', async (msg) => {
         userState[chatId].productCategory = text;
         userState[chatId].step = 'add_product_image';
         await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте изображение продукта:');
-    } else if (userState[chatId].step === 'add_product_image' && msg.photo) {
+    }
+    else if (userState[chatId].step === 'add_expense_title') {
+        userState[chatId].expenseTitle = text;
+        userState[chatId].step = 'add_expense_amount';
+        await sendMessageWithDelete(chatId, 'Введите сумму расхода:');
+    }
+    else if (userState[chatId].step === 'add_expense_amount') {
+        const amount = parseFloat(text);
+        if (isNaN(amount) || amount < 0) {
+            await sendMessageWithDelete(chatId, 'Пожалуйста, введите корректную сумму.');
+            return;
+        }
+        userState[chatId].expenseAmount = amount;
+        userState[chatId].step = 'add_expense_category';
+        await sendMessageWithDelete(chatId, 'Введите категорию расхода:');
+    }
+    else if (userState[chatId].step === 'add_expense_category') {
+        userState[chatId].expenseCategory = text;
+        userState[chatId].step = 'add_expense_description';
+        await sendMessageWithDelete(chatId, 'Введите описание расхода (или отправьте "-" чтобы пропустить):');
+    }
+    else if (userState[chatId].step === 'add_expense_description') {
+        try {
+            const expenseData = {
+                chefId: chatId.toString(),
+                title: userState[chatId].expenseTitle,
+                amount: userState[chatId].expenseAmount,
+                category: userState[chatId].expenseCategory,
+                description: text === '-' ? '' : text,
+                date: new Date()
+            };
+
+            await axios.post('http://api:5000/api/expenses', expenseData);
+            await sendMessageWithDelete(chatId, '✅ Расход успешно добавлен!');
+
+            // Возвращаемся в меню расходов
+            setTimeout(async () => {
+                const expensesMenu = {
+                    reply_markup: JSON.stringify({
+                        inline_keyboard: [
+                            [{ text: '📊 Все расходы', callback_data: 'view_expenses' }],
+                            [{ text: '➕ Добавить расход', callback_data: 'add_expense' }],
+                            [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                        ],
+                    }),
+                };
+                await sendMessageWithDelete(chatId, 'Управление расходами:', expensesMenu);
+            }, 1000);
+
+            delete userState[chatId];
+        } catch (error) {
+            console.error('Error creating expense:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при создании расхода.');
+        }
+    }
+
+    else if (userState[chatId].step === 'add_product_image' && msg.photo) {
         const photo = msg.photo[msg.photo.length - 1];
         const fileId = photo.file_id;
         try {

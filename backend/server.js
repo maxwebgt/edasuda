@@ -4,8 +4,9 @@ const path = require('path');
 const connectDB = require('./config/db');
 const productRoutes = require('./routes/productRoutes');
 const orderRoutes = require('./routes/orderRoutes');
-const userRoutes = require('./routes/userRoutes');  // Подключаем маршруты для пользователей
+const userRoutes = require('./routes/userRoutes');
 const imageRoutes = require('./routes/imageRoutes');
+const expenseRoutes = require('./routes/expenseRoutes'); // Добавляем маршруты расходов
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 
@@ -30,7 +31,7 @@ const swaggerOptions = {
             },
         ],
     },
-    apis: ['./routes/*.js', './controllers/*.js', './routes/userRoutes.js'],  // Включаем файлы с аннотациями для Swagger
+    apis: ['./routes/*.js', './controllers/*.js', './routes/userRoutes.js'],
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
@@ -43,16 +44,15 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Используем маршруты для продуктов, заказов и пользователей
-app.use('/api/products', productRoutes);
-app.use('/api/orders', orderRoutes);
-app.use('/api/users', userRoutes);  // Добавляем маршруты для пользователей
-
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Routes
+app.use('/api/products', productRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/images', imageRoutes);
+app.use('/api/expenses', expenseRoutes); // Добавляем маршруты расходов
 
 app.listen(5000, () => console.log('Server running on port 5000'));
