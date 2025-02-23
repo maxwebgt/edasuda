@@ -43,12 +43,30 @@ const lastBotMessages = {};
 function getByteLength(str) {
     return Buffer.byteLength(str, 'utf8');
 }
+/**
+ * Gets user role from API
+ */
+async function getUserRole(chatId) {
+    if (!chatId) {
+        console.error('[getUserRole] chatId не предоставлен');
+        return null;
+    }
 
+    try {
+        console.log(`[getUserRole] Запрос роли для пользователя ${chatId}`);
+        const response = await axios.get(`http://api:5000/api/users/telegram/${chatId}`);
+        console.log(`[getUserRole] Получены данные пользователя ${chatId}:`, response.data);
+        return response.data.role;
+    } catch (error) {
+        console.error(`[getUserRole] Ошибка получения роли пользователя ${chatId}:`, error.message);
+        return null;
+    }
+}
 /**
  * Prepares reply markup for messages.
  * If inline_keyboard is provided, returns it; else returns the default keyboard.
  */
-function prepareReplyMarkup(options = {}) {
+async function prepareReplyMarkup(options = {}, chatId) {
     console.log('[prepareReplyMarkup] Incoming options:', options);
     if (options.reply_markup) {
         try {
@@ -64,16 +82,42 @@ function prepareReplyMarkup(options = {}) {
             console.error('[prepareReplyMarkup] Error parsing reply_markup:', error);
         }
     }
-    const replyKeyboard = {
-        keyboard: [
-            ['🍞 Каталог', '📋 Заказы'],
-            ['⚙️ Управление'],
-            ['❓ Помощь']
-        ],
-        resize_keyboard: true,
-    };
-    console.log('[prepareReplyMarkup] Returning default reply keyboard:', replyKeyboard);
-    return replyKeyboard;
+
+    try {
+        // Получаем роль пользователя
+        console.log(`[prepareReplyMarkup] Запрос роли для пользователя с chatId: ${chatId}`);
+        const userRole = await getUserRole(chatId.toString());
+        console.log(`[prepareReplyMarkup] Роль пользователя ${chatId}: ${userRole}`);
+
+        const keyboard = [
+            ['🍞 Каталог', '📋 Заказы']
+        ];
+
+        // Добавляем кнопку "Управление" только для поваров
+        if (userRole === 'chef') {
+            keyboard.push(['⚙️ Управление']);
+        }
+
+        keyboard.push(['❓ Помощь']);
+
+        const replyKeyboard = {
+            keyboard: keyboard,
+            resize_keyboard: true,
+        };
+
+        console.log('[prepareReplyMarkup] Returning keyboard:', replyKeyboard);
+        return replyKeyboard;
+    } catch (error) {
+        console.error('[prepareReplyMarkup] Ошибка при формировании клавиатуры:', error);
+        // Возвращаем базовую клавиатуру в случае ошибки
+        return {
+            keyboard: [
+                ['🍞 Каталог', '📋 Заказы'],
+                ['❓ Помощь']
+            ],
+            resize_keyboard: true,
+        };
+    }
 }
 
 /**
@@ -84,23 +128,23 @@ async function sendMessageWithDelete(chatId, text, options = {}) {
         if (lastBotMessages[chatId]) {
             try {
                 await bot.deleteMessage(chatId, lastBotMessages[chatId]);
-                console.log(`[sendMessageWithDelete] Deleted previous message for chat ${chatId}`);
+                console.log(`[sendMessageWithDelete] Удалено предыдущее сообщение для чата ${chatId}`);
             } catch (error) {
-                console.log(`[sendMessageWithDelete] Error deleting previous message: ${error.message}`);
+                console.log(`[sendMessageWithDelete] Ошибка удаления предыдущего сообщения: ${error.message}`);
             }
         }
-        const replyMarkup = prepareReplyMarkup(options);
+
+        console.log(`[sendMessageWithDelete] Подготовка сообщения для чата ${chatId}`);
+        const replyMarkup = await prepareReplyMarkup(options, chatId);
         const messageOptions = { ...options, reply_markup: replyMarkup };
-        console.log(
-            `[sendMessageWithDelete] Sending message to chat ${chatId} with text: "${text}" and options:`,
-            messageOptions
-        );
+
+        console.log(`[sendMessageWithDelete] Отправка сообщения в чат ${chatId}:`, { text, options: messageOptions });
         const message = await bot.sendMessage(chatId, text, messageOptions);
         lastBotMessages[chatId] = message.message_id;
-        console.log(`[sendMessageWithDelete] Message sent. ID: ${message.message_id}`);
+        console.log(`[sendMessageWithDelete] Сообщение отправлено. ID: ${message.message_id}`);
         return message;
     } catch (error) {
-        console.error('[sendMessageWithDelete] Error sending message:', error);
+        console.error('[sendMessageWithDelete] Ошибка отправки сообщения:', error);
         throw error;
     }
 }
@@ -739,16 +783,28 @@ bot.on('message', async (msg) => {
         return;
     }
     if (text === '⚙️ Управление') {
-        const managementMenu = {
-            reply_markup: JSON.stringify({
-                inline_keyboard: [
-                    [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
-                    [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
-                    [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
-                ],
-            }),
-        };
-        await sendMessageWithDelete(chatId, 'Панель управления:', managementMenu);
+        try {
+            const userRole = await getUserRole(chatId);
+            if (userRole !== 'chef') {
+                console.log(`[Управление] Отказано в доступе пользователю ${chatId}: недостаточно прав`);
+                await sendMessageWithDelete(chatId, 'У вас нет доступа к этому разделу.');
+                return;
+            }
+
+            const managementMenu = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
+                        [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
+                        [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
+                    ],
+                }),
+            };
+            await sendMessageWithDelete(chatId, 'Панель управления:', managementMenu);
+        } catch (error) {
+            console.error('[Управление] Ошибка:', error.message);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при доступе к панели управления.');
+        }
         return;
     }
     if (!userState[chatId]) {

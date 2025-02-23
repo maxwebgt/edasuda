@@ -127,4 +127,41 @@ router.get('/:id', userController.getUserById);
  */
 router.put('/:id', userController.updateUser);
 
+// Получение пользователя по telegramId
+/**
+ * @swagger
+ * /api/users/telegram/{telegramId}:
+ *   get:
+ *     summary: Получение пользователя по telegramId
+ *     tags: [Users]
+ *     parameters:
+ *       - in: path
+ *         name: telegramId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Telegram ID пользователя
+ *     responses:
+ *       200:
+ *         description: Пользователь найден
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 name:
+ *                   type: string
+ *                 email:
+ *                   type: string
+ *                 role:
+ *                   type: string
+ *                 telegramId:
+ *                   type: string
+ *       404:
+ *         description: Пользователь не найден
+ *       500:
+ *         description: Ошибка при получении пользователя
+ */
+router.get('/telegram/:telegramId', userController.getUserByTelegramId);
+
 module.exports = router;

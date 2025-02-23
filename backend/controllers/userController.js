@@ -17,7 +17,7 @@ exports.createUser = async (req, res) => {
 
     try {
         const newUser = new User({
-            name,
+            firstName: name,
             email,
             password,  // Пароль будет захеширован автоматически
             role,
@@ -62,9 +62,9 @@ exports.updateUser = async (req, res) => {
             return res.status(404).json({ message: 'Пользователь не найден' });
         }
 
-        user.name = name || user.name;
+        user.firstName = name || user.firstName;
         user.email = email || user.email;
-        user.password = password || user.password;  // Пароль будет захеширован        автоматически
+        user.password = password || user.password;  // Пароль будет захеширован автоматически
         user.role = role || user.role;
         user.telegramId = telegramId || user.telegramId;
 
@@ -73,5 +73,24 @@ exports.updateUser = async (req, res) => {
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Ошибка при обновлении пользователя' });
+    }
+};
+
+// Получение пользователя по telegramId
+exports.getUserByTelegramId = async (req, res) => {
+    const { telegramId } = req.params;
+    console.log(`Запрос с telegramId: ${telegramId}`);  // Логируем запрос
+
+    try {
+        const user = await User.findOne({ telegramId });
+
+        if (!user) {
+            return res.status(404).json({ message: 'Пользователь не найден' });
+        }
+
+        res.json(user);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Ошибка при получении пользователя' });
     }
 };
