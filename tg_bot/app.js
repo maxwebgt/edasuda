@@ -161,33 +161,37 @@ const statusMap = {
 
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
-    console.log(`[onText /start] Received /start from chat ${chatId}`);
-    const telegramLogin = msg.from.username || '';
-    if (!telegramLogin) {
-        console.error(`[onText /start] Telegram login is missing for chat ${chatId}. Cannot create user.`);
-    } else {
-        const apiUrlUsers = 'http://api:5000/api/users';
-        try {
-            console.log(`[onText /start] Fetching users from API to check for telegramId: ${telegramLogin}`);
-            const response = await axios.get(apiUrlUsers);
-            const users = response.data;
-            const existingUser = users.find((u) => u.telegramId === telegramLogin);
-            if (!existingUser) {
-                console.log(`[onText /start] No user found with telegramId "${telegramLogin}". Creating new user.`);
-                const payload = { telegramId: telegramLogin, role: 'client', username: telegramLogin };
-                console.log(`[onText /start] Creating user with payload:`, payload);
-                await axios.post(apiUrlUsers, payload);
-                console.log(`[onText /start] New user created with telegramId: ${telegramLogin}`);
-            } else {
-                console.log(`[onText /start] User with telegramId "${telegramLogin}" already exists.`);
-            }
-        } catch (error) {
-            console.error('[onText /start] Error during API call to check/create user:', error.message);
-            if (error.response && error.response.data) {
-                console.error('[onText /start] Error response data:', error.response.data);
-            }
+    const username = msg.from.username;
+    console.log(`[onText /start] Получен /start от пользователя ${chatId}, username: ${username || 'отсутствует'}`);
+
+    const apiUrlUsers = 'http://api:5000/api/users';
+    try {
+        console.log(`[onText /start] Проверяем существование пользователя с telegramId: ${chatId}`);
+        const response = await axios.get(apiUrlUsers);
+        const users = response.data;
+        const existingUser = users.find((u) => u.telegramId === chatId.toString());
+
+        if (!existingUser) {
+            console.log(`[onText /start] Пользователь с telegramId "${chatId}" не найден. Создаем нового пользователя.`);
+            const payload = {
+                telegramId: chatId.toString(),
+                role: 'client',
+                username: username || `user_${chatId}`,
+                name: username || `user_${chatId}`  // Используем username в качестве name
+            };
+            console.log(`[onText /start] Создаем пользователя с данными:`, payload);
+            await axios.post(apiUrlUsers, payload);
+            console.log(`[onText /start] Новый пользователь создан с telegramId: ${chatId}, name: ${payload.name}`);
+        } else {
+            console.log(`[onText /start] Пользователь с telegramId "${chatId}" уже существует.`);
+        }
+    } catch (error) {
+        console.error('[onText /start] Ошибка при работе с API:', error.message);
+        if (error.response && error.response.data) {
+            console.error('[onText /start] Данные ошибки:', error.response.data);
         }
     }
+
     await sendMessageWithDelete(msg.chat.id, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
 });
 
