@@ -256,6 +256,7 @@ bot.onText(/\/start/, async (msg) => {
 
     const apiUrlUsers = 'http://api:5000/api/users';
     try {
+        // Проверяем/создаем пользователя как раньше
         console.log(`[onText /start] Проверяем существование пользователя с telegramId: ${chatId}`);
         const response = await axios.get(apiUrlUsers);
         const users = response.data;
@@ -267,7 +268,7 @@ bot.onText(/\/start/, async (msg) => {
                 telegramId: chatId.toString(),
                 role: 'client',
                 username: username || `user_${chatId}`,
-                name: username || `user_${chatId}`  // Используем username в качестве name
+                name: username || `user_${chatId}`
             };
             console.log(`[onText /start] Создаем пользователя с данными:`, payload);
             await axios.post(apiUrlUsers, payload);
@@ -275,14 +276,81 @@ bot.onText(/\/start/, async (msg) => {
         } else {
             console.log(`[onText /start] Пользователь с telegramId "${chatId}" уже существует.`);
         }
+
+        // Получаем активное приветствие
+        console.log(`[onText /start] Получаем активное приветствие`);
+        const welcomeResponse = await axios.get('http://api:5000/api/welcome');
+        const welcomes = welcomeResponse.data;
+        const activeWelcome = welcomes.find(w => w.isActive === true);
+
+        if (activeWelcome) {
+            console.log(`[onText /start] Найдено активное приветствие:`, activeWelcome);
+
+            // Формируем текст приветствия
+            let welcomeText = '';
+            if (activeWelcome.title) {
+                welcomeText += `${activeWelcome.title}\n\n`;
+            }
+            if (activeWelcome.description) {
+                welcomeText += `${activeWelcome.description}\n`;
+            }
+
+            // Если есть видео, отправляем его с текстом
+            if (activeWelcome.video) {
+                try {
+                    console.log(`[onText /start] Отправка приветственного видео`);
+                    const videoResponse = await axios.get(
+                        `http://api:5000/api/videos/${activeWelcome.video}`,
+                        { responseType: 'arraybuffer' }
+                    );
+
+                    await bot.sendVideo(chatId, Buffer.from(videoResponse.data), {
+                        caption: welcomeText,
+                        reply_markup: mainMenu.reply_markup
+                    });
+                } catch (error) {
+                    console.error('[onText /start] Ошибка при отправке видео:', error);
+                    // Если не удалось отправить видео, отправляем хотя бы текст
+                    await sendMessageWithDelete(chatId, welcomeText, mainMenu);
+                }
+            }
+            // Если нет видео, но есть фото
+            else if (activeWelcome.photo) {
+                try {
+                    console.log(`[onText /start] Отправка приветственного фото`);
+                    const photoResponse = await axios.get(
+                        `http://api:5000/api/images/file/${activeWelcome.photo}`,
+                        { responseType: 'arraybuffer' }
+                    );
+
+                    await bot.sendPhoto(chatId, Buffer.from(photoResponse.data), {
+                        caption: welcomeText,
+                        reply_markup: mainMenu.reply_markup
+                    });
+                } catch (error) {
+                    console.error('[onText /start] Ошибка при отправке фото:', error);
+                    // Если не удалось отправить фото, отправляем хотя бы текст
+                    await sendMessageWithDelete(chatId, welcomeText, mainMenu);
+                }
+            }
+            // Если нет ни видео, ни фото
+            else {
+                console.log(`[onText /start] Отправка только текстового приветствия`);
+                await sendMessageWithDelete(chatId, welcomeText, mainMenu);
+            }
+        } else {
+            // Если нет активного приветствия, отправляем стандартное
+            console.log(`[onText /start] Активное приветствие не найдено, отправка стандартного`);
+            await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
+        }
     } catch (error) {
-        console.error('[onText /start] Ошибка при работе с API:', error.message);
+        console.error('[onText /start] Ошибка:', error.message);
         if (error.response && error.response.data) {
             console.error('[onText /start] Данные ошибки:', error.response.data);
         }
+        // В случае ошибки отправляем стандартное приветствие
+        await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
     }
-
-    await sendMessageWithDelete(msg.chat.id, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
 });
 
 bot.on('callback_query', async (callbackQuery) => {
@@ -594,6 +662,33 @@ bot.on('callback_query', async (callbackQuery) => {
             await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка приветствий.');
         }
     }
+    else if (data.startsWith('toggle_welcome_status_')) {
+        try {
+            const [, , welcomeId, newStatus] = data.split('_');
+            const isActive = newStatus === 'true';
+
+            // Обновляем статус приветствия
+            await axios.put(`http://api:5000/api/welcome/${welcomeId}`, {
+                isActive: isActive
+            });
+
+            await sendMessageWithDelete(chatId,
+                `Статус приветствия успешно ${isActive ? 'активирован ✅' : 'деактивирован ❌'}!`
+            );
+
+            // Перезагружаем детали приветствия через небольшую задержку
+            setTimeout(() => {
+                bot.emit('callback_query', {
+                    message: { chat: { id: chatId } },
+                    data: `view_welcome_${welcomeId}`
+                });
+            }, 1000);
+
+        } catch (error) {
+            console.error('Error toggling welcome status:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при изменении статуса приветствия.');
+        }
+    }
     else if (data.startsWith('view_welcome_')) {
         try {
             const welcomeId = data.split('view_welcome_')[1];
@@ -603,17 +698,22 @@ bot.on('callback_query', async (callbackQuery) => {
             let messageText = `📝 Приветствие\n\n`;
             if (welcome.title) messageText += `📌 Заголовок: ${welcome.title}\n`;
             if (welcome.description) messageText += `📄 Описание: ${welcome.description}\n`;
+            messageText += `📊 Статус: ${welcome.isActive ? 'Активно ✅' : 'Неактивно ❌'}\n`;
 
             const keyboard = {
                 reply_markup: JSON.stringify({
                     inline_keyboard: [
-                        [{ text: '❌ Удалить', callback_data: `delete_welcome_${welcomeId}` }],
+                        [{
+                            text: welcome.isActive ? '❌ Деактивировать' : '✅ Активировать',
+                            callback_data: `toggle_welcome_${welcomeId}_${!welcome.isActive}`
+                        }],
+                        [{ text: '🗑 Удалить', callback_data: `delete_welcome_${welcomeId}` }],
                         [{ text: '⬅️ Назад', callback_data: 'view_welcomes' }]
                     ]
                 })
             };
 
-            // Если есть видео, показываем только видео
+            // Если есть видео, показываем видео
             if (welcome.video) {
                 try {
                     // Удаляем предыдущее сообщение
@@ -633,16 +733,13 @@ bot.on('callback_query', async (callbackQuery) => {
 
                     // Отправляем видео с подписью
                     const message = await bot.sendVideo(chatId, Buffer.from(videoResponse.data), {
-                        caption: messageText
+                        caption: messageText,
+                        ...keyboard
                     });
 
                     if (message) {
                         lastBotMessages[chatId] = message.message_id;
                     }
-
-                    // Отправляем кнопки отдельным сообщением
-                    await bot.sendMessage(chatId, 'Выберите действие:', keyboard);
-
                 } catch (error) {
                     console.error('Error loading welcome video:', error);
                     await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке видео.');
@@ -673,6 +770,47 @@ bot.on('callback_query', async (callbackQuery) => {
         } catch (error) {
             console.error('Error fetching welcome details:', error);
             await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей приветствия.');
+        }
+    }
+    else if (data.startsWith('toggle_welcome_')) {
+        try {
+            // Было:
+            // const [, welcomeId, newStatus] = data.split('_');
+
+            // Исправляем на:
+            const [, , welcomeId, newStatus] = data.split('_');  // Добавляем дополнительную запятую для пропуска слова 'welcome'
+
+            // Убеждаемся, что welcomeId существует и корректен
+            if (!welcomeId) {
+                throw new Error('Welcome ID is missing');
+            }
+
+            console.log(`[toggle_welcome] Toggling welcome status for ID: ${welcomeId}, new status: ${newStatus}`);
+
+            const isActive = newStatus === 'true';
+
+            // Обновляем статус приветствия через API
+            await axios.put(`http://api:5000/api/welcome/${welcomeId}`, {
+                isActive: isActive
+            });
+
+            // Отправляем уведомление об успешном изменении
+            await sendMessageWithDelete(chatId,
+                `Статус приветствия успешно ${isActive ? 'активирован ✅' : 'деактивирован ❌'}!`
+            );
+
+            // Перезагружаем информацию о приветствии с небольшой задержкой
+            setTimeout(() => {
+                bot.emit('callback_query', {
+                    message: { chat: { id: chatId } },
+                    data: `view_welcome_${welcomeId}`
+                });
+            }, 1000);
+
+        } catch (error) {
+            console.error('Error toggling welcome status:', error);
+            console.error('Error details:', error.response?.data);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при изменении статуса приветствия.');
         }
     }
     else if (data.startsWith('delete_welcome_')) {

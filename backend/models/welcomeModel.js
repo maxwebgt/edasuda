@@ -13,6 +13,10 @@ const welcomeSchema = new mongoose.Schema({
         type: String,  // URL или путь к видео
         required: false
     },
+    isActive: {
+        type: Boolean,
+        default: false
+    },
     description: {
         type: String,
         required: false
