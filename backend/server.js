@@ -26,18 +26,25 @@ dotenv.config();
 connectDB();
 
 const app = express();
-// Middleware для сбора метрик о запросах
+// Middleware для метрик
 app.use((req, res, next) => {
     const start = Date.now();
+
+    // Добавляем слушатель окончания запроса
     res.on('finish', () => {
         const duration = Date.now() - start;
-        metrics.httpRequestDurationMicroseconds
-            .labels(req.method, req.path, res.statusCode)
+        const route = req.route ? req.route.path : req.path;
+
+        // Записываем метрики
+        metrics.httpRequestDuration
+            .labels(req.method, route, res.statusCode)
             .observe(duration / 1000);
+
         metrics.httpRequestsTotal
-            .labels(req.method, req.path, res.statusCode)
+            .labels(req.method, route, res.statusCode)
             .inc();
     });
+
     next();
 });
 
@@ -188,9 +195,16 @@ app.get('/api-docs', swaggerUi.setup(swaggerDocs, {
     customfavIcon: "/assets/favicon.ico"
 }));
 // Endpoint для метрик Prometheus
+// Эндпоинт для метрик Prometheus
 app.get('/metrics', async (req, res) => {
-    res.set('Content-Type', register.contentType);
-    res.send(await register.metrics());
+    try {
+        res.set('Content-Type', register.contentType);
+        const metrics = await register.metrics();
+        res.send(metrics);
+    } catch (err) {
+        console.error('Error generating metrics:', err);
+        res.status(500).send(err.message);
+    }
 });
 
 // Логирование запросов
