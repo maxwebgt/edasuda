@@ -1,0 +1,29 @@
+groups:
+  - name: API Alerts
+    rules:
+      - alert: HighResponseTime
+        expr: rate(http_request_duration_seconds_sum[5m]) / rate(http_request_duration_seconds_count[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High response time (> 1s)
+          description: API response time is above 1 second for the last 5 minutes
+
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status_code=~"5.."}[5m]) / rate(http_requests_total[5m]) * 100 > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: High error rate (> 5%)
+          description: API error rate is above 5% for the last 5 minutes
+
+      - alert: HighMemoryUsage
+        expr: process_resident_memory_bytes > 1e8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: High memory usage
+          description: Memory usage is above 100MB

@@ -11,7 +11,8 @@
     "axios": "^0.21.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "node-telegram-bot-api": "^0.50.0"
+    "node-telegram-bot-api": "^0.50.0",
+    "prom-client": "^14.2.0"
   },
   "author": "Your Name",
   "license": "ISC",

@@ -21,11 +21,26 @@ const welcomeRoutes = require('./routes/welcomeRoutes');
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const fs = require('fs');
-
+const { register, metrics } = require('./metrics');
 dotenv.config();
 connectDB();
 
 const app = express();
+// Middleware для сбора метрик о запросах
+app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+        const duration = Date.now() - start;
+        metrics.httpRequestDurationMicroseconds
+            .labels(req.method, req.path, res.statusCode)
+            .observe(duration / 1000);
+        metrics.httpRequestsTotal
+            .labels(req.method, req.path, res.statusCode)
+            .inc();
+    });
+    next();
+});
+
 
 // Базовые middleware
 app.use(express.json({ limit: '50mb' }));
@@ -172,6 +187,11 @@ app.get('/api-docs', swaggerUi.setup(swaggerDocs, {
     customSiteTitle: "API Documentation",
     customfavIcon: "/assets/favicon.ico"
 }));
+// Endpoint для метрик Prometheus
+app.get('/metrics', async (req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.send(await register.metrics());
+});
 
 // Логирование запросов
 app.use((req, res, next) => {
@@ -205,7 +225,11 @@ dirs.forEach(dir => {
         fs.mkdirSync(dir, { recursive: true });
     }
 });
-
+// Endpoint для метрик Prometheus
+app.get('/metrics', async (req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.send(await register.metrics());
+});
 // API Routes
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);

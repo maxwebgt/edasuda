@@ -1,0 +1,31 @@
+groups:
+  - name: ApiAlerts
+    rules:
+      - alert: HighResponseTime
+        expr: rate(http_request_duration_seconds_sum[5m]) / rate(http_request_duration_seconds_count[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High response time detected"
+          description: "Average response time is above 1 second for the last 5 minutes"
+
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{status_code=~"5.."}[5m]) / rate(http_requests_total[5m]) * 100 > 5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is above 5% for the last 5 minutes"
+
+  - name: BotAlerts
+    rules:
+      - alert: BotMessageProcessingDelay
+        expr: telegram_bot_message_processing_seconds > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot message processing delay"
+          description: "Telegram bot is taking too long to process messages"
