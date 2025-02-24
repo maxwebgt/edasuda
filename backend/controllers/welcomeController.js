@@ -58,3 +58,19 @@ exports.delete = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+exports.deactivateAll = async (req, res) => {
+    try {
+        await Welcome.updateMany({}, { isActive: false });
+        res.status(200).json({
+            success: true,
+            message: 'All welcomes deactivated'
+        });
+    } catch (error) {
+        console.error('Error deactivating all welcomes:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
