@@ -1836,7 +1836,7 @@ bot.on('message', async (msg) => {
         await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте изображение продукта. После этого вы сможете добавить видео (или пропустить этот шаг):');
     }
     else if (userState[chatId]?.step === 'add_welcome_title') {
-        userState[chatId].welcomeTitle = text;
+        userState[chatId].welcomeTitle = text === '-' ? '' : text;
         userState[chatId].step = 'add_welcome_description';
         await sendMessageWithDelete(chatId, 'Введите описание приветствия (или отправьте "-" для пропуска):');
     }
@@ -2158,12 +2158,12 @@ bot.on('message', async (msg) => {
         }
     }
 
-    else if (userState[chatId].step === 'add_news_title') {
+    else if (userState[chatId]?.step === 'add_news_title') {
         userState[chatId].newsTitle = text;
         userState[chatId].step = 'add_news_content';
         await sendMessageWithDelete(chatId, 'Введите содержание новости:');
     }
-    else if (userState[chatId].step === 'add_news_content') {
+    else if (userState[chatId]?.step === 'add_news_content') {
         try {
             const newsData = {
                 title: userState[chatId].newsTitle,
@@ -2194,12 +2194,12 @@ bot.on('message', async (msg) => {
             await sendMessageWithDelete(chatId, 'Произошла ошибка при создании новости.');
         }
     }
-    else if (userState[chatId].step === 'add_expense_title') {
+    else if (userState[chatId]?.step === 'add_expense_title') {
         userState[chatId].expenseTitle = text;
         userState[chatId].step = 'add_expense_amount';
         await sendMessageWithDelete(chatId, 'Введите сумму расхода:');
     }
-    else if (userState[chatId].step === 'add_expense_amount') {
+    else if (userState[chatId]?.step === 'add_expense_amount') {
         const amount = parseFloat(text);
         if (isNaN(amount) || amount < 0) {
             await sendMessageWithDelete(chatId, 'Пожалуйста, введите корректную сумму.');
@@ -2209,12 +2209,12 @@ bot.on('message', async (msg) => {
         userState[chatId].step = 'add_expense_category';
         await sendMessageWithDelete(chatId, 'Введите категорию расхода:');
     }
-    else if (userState[chatId].step === 'add_expense_category') {
+    else if (userState[chatId]?.step === 'add_expense_category') {
         userState[chatId].expenseCategory = text;
         userState[chatId].step = 'add_expense_description';
         await sendMessageWithDelete(chatId, 'Введите описание расхода (или отправьте "-" чтобы пропустить):');
     }
-    else if (userState[chatId].step === 'add_expense_description') {
+    else if (userState[chatId]?.step === 'add_expense_description') {
         try {
             const expenseData = {
                 chefId: chatId.toString(),
