@@ -6,3 +6,4 @@ mongo_data/*
 logs/*
 !logs/
 .idea/
+coverage/
