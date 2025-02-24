@@ -50,7 +50,7 @@ services:
       dockerfile: Dockerfile
     container_name: api_app
     environment:
-      - MONGO_URI=mongodb://root:example@mongo:27017
+      - MONGO_URI=${MONGO_URI}
     ports:
       - "5000:5000"
     volumes:
@@ -67,7 +67,7 @@ services:
       dockerfile: Dockerfile
     container_name: tg_bot_app
     environment:
-      - TELEGRAM_BOT_TOKEN=7637457882:AAHbeS-f8bNRdN0GKSLwjM1K2NBXFjBpc9g
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
     ports:
       - "5001:5001"
     volumes:

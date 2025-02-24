@@ -6,4 +6,5 @@ mongo_data/*
 logs/*
 !logs/
 .idea/
+.env
 coverage/
