@@ -17,6 +17,7 @@ const imageRoutes = require('./routes/imageRoutes');
 const expenseRoutes = require('./routes/expenseRoutes');
 const newsRoutes = require('./routes/newsRoutes');
 const videoRoutes = require('./routes/videoRoutes');
+const welcomeRoutes = require('./routes/welcomeRoutes');
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
 const fs = require('fs');
@@ -213,6 +214,7 @@ app.use('/api/images', imageRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/news', newsRoutes);
 app.use('/api/videos', videoRoutes);
+app.use('/api/welcome', welcomeRoutes);
 
 // Корневой маршрут
 app.get('/', (req, res) => {

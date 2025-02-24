@@ -541,6 +541,148 @@ bot.on('callback_query', async (callbackQuery) => {
             }
         }
     }
+    else if (data === 'welcome_menu') {
+        const welcomeMenu = {
+            reply_markup: JSON.stringify({
+                inline_keyboard: [
+                    [{ text: '➕ Новое', callback_data: 'add_welcome' }],
+                    [{ text: '📋 Все приветствия', callback_data: 'view_welcomes' }],
+                    [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                ],
+            }),
+        };
+        await sendMessageWithDelete(chatId, 'Управление приветствиями:', welcomeMenu);
+    }
+    else if (data === 'add_welcome') {
+        userState[chatId] = { step: 'add_welcome_title' };
+        await sendMessageWithDelete(chatId, 'Введите заголовок приветствия:');
+    }
+    else if (data === 'view_welcomes') {
+        try {
+            const response = await axios.get('http://api:5000/api/welcome');
+            const welcomes = response.data;
+
+            if (welcomes.length === 0) {
+                await sendMessageWithDelete(chatId, 'Приветствия пока не созданы.');
+                return;
+            }
+
+            let messageText = '📋 Список приветствий:\n\n';
+            const inlineKeyboard = welcomes.map(welcome => ([{
+                text: welcome.title || 'Без названия',
+                callback_data: `view_welcome_${welcome._id}`
+            }]));
+
+            inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'welcome_menu' }]);
+
+            await sendMessageWithDelete(chatId, messageText, {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: inlineKeyboard
+                })
+            });
+        } catch (error) {
+            console.error('Error fetching welcomes:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка приветствий.');
+        }
+    }
+    else if (data.startsWith('view_welcome_')) {
+        try {
+            const welcomeId = data.split('view_welcome_')[1];
+            const response = await axios.get(`http://api:5000/api/welcome/${welcomeId}`);
+            const welcome = response.data;
+
+            let welcomeDetails = `📝 Приветствие\n\n`;
+            if (welcome.title) welcomeDetails += `📌 Заголовок: ${welcome.title}\n`;
+            if (welcome.description) welcomeDetails += `📄 Описание: ${welcome.description}\n`;
+
+            const keyboard = {
+                reply_markup: JSON.stringify({
+                    inline_keyboard: [
+                        [{ text: '🗑 Удалить', callback_data: `delete_welcome_${welcomeId}` }],
+                        [{ text: '⬅️ Назад к списку', callback_data: 'view_welcomes' }]
+                    ]
+                })
+            };
+
+            if (welcome.photo || welcome.video) {
+                // Если есть медиафайлы, отправляем их
+                const mediaGroup = [];
+
+                if (welcome.photo) {
+                    try {
+                        const photoResponse = await axios.get(
+                            `http://api:5000/api/images/file/${welcome.photo}`,
+                            { responseType: 'arraybuffer' }
+                        );
+                        mediaGroup.push({
+                            type: 'photo',
+                            media: Buffer.from(photoResponse.data),
+                            caption: welcomeDetails
+                        });
+                    } catch (error) {
+                        console.error('Error loading welcome photo:', error);
+                    }
+                }
+
+                if (welcome.video) {
+                    try {
+                        const videoResponse = await axios.get(
+                            `http://api:5000/api/videos/${welcome.video}`,
+                            { responseType: 'arraybuffer' }
+                        );
+                        mediaGroup.push({
+                            type: 'video',
+                            media: Buffer.from(videoResponse.data)
+                        });
+                    } catch (error) {
+                        console.error('Error loading welcome video:', error);
+                    }
+                }
+
+                if (mediaGroup.length > 0) {
+                    await bot.sendMediaGroup(chatId, mediaGroup);
+                    await bot.sendMessage(chatId, 'Выберите действие:', keyboard);
+                } else {
+                    await sendMessageWithDelete(chatId, welcomeDetails, keyboard);
+                }
+            } else {
+                await sendMessageWithDelete(chatId, welcomeDetails, keyboard);
+            }
+        } catch (error) {
+            console.error('Error fetching welcome details:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей приветствия.');
+        }
+    }
+    else if (data.startsWith('delete_welcome_')) {
+        const welcomeId = data.split('delete_welcome_')[1];
+        const confirmKeyboard = {
+            reply_markup: JSON.stringify({
+                inline_keyboard: [
+                    [
+                        { text: '✅ Да, удалить', callback_data: `confirm_delete_welcome_${welcomeId}` },
+                        { text: '❌ Отмена', callback_data: `view_welcome_${welcomeId}` }
+                    ]
+                ]
+            })
+        };
+        await sendMessageWithDelete(chatId, 'Вы уверены, что хотите удалить это приветствие?', confirmKeyboard);
+    }
+    else if (data.startsWith('confirm_delete_welcome_')) {
+        try {
+            const welcomeId = data.split('confirm_delete_welcome_')[1];
+            await axios.delete(`http://api:5000/api/welcome/${welcomeId}`);
+            await sendMessageWithDelete(chatId, 'Приветствие успешно удалено!');
+            setTimeout(() => {
+                bot.emit('callback_query', {
+                    message: { chat: { id: chatId } },
+                    data: 'view_welcomes'
+                });
+            }, 1000);
+        } catch (error) {
+            console.error('Error deleting welcome:', error);
+            await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении приветствия.');
+        }
+    }
     else if (data === 'news_menu') {
         const newsMenu = {
             reply_markup: JSON.stringify({
@@ -779,6 +921,7 @@ bot.on('callback_query', async (callbackQuery) => {
                         { text: '💵 Доходы', callback_data: 'income_menu' }
                     ],
                     [{ text: '📰 Новости', callback_data: 'news_menu' }],
+                    [{ text: '👋 Приветствие', callback_data: 'welcome_menu' }], // Добавляем новую кнопку
                     [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
                     [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
                 ],
@@ -1530,6 +1673,179 @@ bot.on('message', async (msg) => {
         userState[chatId].step = 'add_product_media';
         await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте изображение продукта. После этого вы сможете добавить видео (или пропустить этот шаг):');
     }
+    if (userState[chatId]?.step === 'add_welcome_title') {
+        userState[chatId].welcomeTitle = text;
+        userState[chatId].step = 'add_welcome_description';
+        await sendMessageWithDelete(chatId, 'Введите описание приветствия (или отправьте "-" для пропуска):');
+    }
+    else if (userState[chatId]?.step === 'add_welcome_description') {
+        userState[chatId].welcomeDescription = text === '-' ? '' : text;
+        userState[chatId].step = 'add_welcome_media';
+        await sendMessageWithDelete(chatId, 'Отправьте фото для приветствия (или отправьте "пропустить" для пропуска):');
+    }
+    else if (userState[chatId]?.step === 'add_welcome_media') {
+        if (text?.toLowerCase() === 'пропустить') {
+            // Создаем приветствие без медиафайлов
+            try {
+                const welcomeData = {
+                    title: userState[chatId].welcomeTitle,
+                    description: userState[chatId].welcomeDescription
+                };
+
+                await axios.post('http://api:5000/api/welcome', welcomeData);
+                await sendMessageWithDelete(chatId, '✅ Приветствие успешно создано!');
+
+                setTimeout(async () => {
+                    const welcomeMenu = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [{ text: '➕ Новое', callback_data: 'add_welcome' }],
+                                [{ text: '📋 Все приветствия', callback_data: 'view_welcomes' }],
+                                [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                            ],
+                        }),
+                    };
+                    await sendMessageWithDelete(chatId, 'Управление приветствиями:', welcomeMenu);
+                }, 1000);
+
+                delete userState[chatId];
+            } catch (error) {
+                console.error('Error creating welcome:', error);
+                await sendMessageWithDelete(chatId, 'Произошла ошибка при создании приветствия.');
+            }
+        } else if (msg.photo) {
+            try {
+                // Сохраняем фото
+                const photo = msg.photo[msg.photo.length - 1];
+                const file = await bot.getFile(photo.file_id);
+                const fileLink = file.fileLink || await bot.getFileLink(photo.file_id);
+
+                const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+                const buffer = Buffer.from(response.data);
+                const timestamp = Date.now();
+                const filename = `${timestamp}.jpg`;
+
+                const form = new FormData();
+                form.append('image', buffer, {
+                    filename: filename,
+                    contentType: 'image/jpeg'
+                });
+
+                const imageResponse = await axios.post('http://api:5000/api/images/upload', form, {
+                    headers: form.getHeaders()
+                });
+
+                userState[chatId].welcomePhoto = imageResponse.data.image.filename;
+                userState[chatId].step = 'add_welcome_video';
+
+                await sendMessageWithDelete(chatId,
+                    'Фото добавлено! Теперь отправьте видео для приветствия (или напишите "пропустить"):'
+                );
+            } catch (error) {
+                console.error('Error uploading welcome photo:', error);
+                await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке фото. Попробуйте еще раз или напишите "пропустить".');
+            }
+        } else {
+            await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте фото или напишите "пропустить".');
+        }
+    }
+
+    else if (userState[chatId]?.step === 'add_welcome_video') {
+        if (text?.toLowerCase() === 'пропустить') {
+            try {
+                const welcomeData = {
+                    title: userState[chatId].welcomeTitle,
+                    description: userState[chatId].welcomeDescription,
+                    photo: userState[chatId].welcomePhoto
+                };
+
+                await axios.post('http://api:5000/api/welcome', welcomeData);
+                await sendMessageWithDelete(chatId, '✅ Приветствие успешно создано!');
+
+                setTimeout(async () => {
+                    const welcomeMenu = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [{ text: '➕ Новое', callback_data: 'add_welcome' }],
+                                [{ text: '📋 Все приветствия', callback_data: 'view_welcomes' }],
+                                [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                            ],
+                        }),
+                    };
+                    await sendMessageWithDelete(chatId, 'Управление приветствиями:', welcomeMenu);
+                }, 1000);
+
+                delete userState[chatId];
+            } catch (error) {
+                console.error('Error creating welcome with photo:', error);
+                await sendMessageWithDelete(chatId, 'Произошла ошибка при создании приветствия.');
+            }
+        } else if (msg.video || (msg.document && msg.document.mime_type?.startsWith('video/'))) {
+            try {
+                const fileId = msg.video?.file_id || msg.document?.file_id;
+                const file = await bot.getFile(fileId);
+                const fileLink = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+
+                const videoResponse = await axios({
+                    method: 'get',
+                    url: fileLink,
+                    responseType: 'arraybuffer',
+                    maxContentLength: 50 * 1024 * 1024
+                });
+
+                const form = new FormData();
+                const videoBuffer = Buffer.from(videoResponse.data);
+
+                form.append('video', videoBuffer, {
+                    filename: `video_${Date.now()}.mp4`,
+                    contentType: msg.video?.mime_type || msg.document?.mime_type || 'video/mp4'
+                });
+
+                const uploadResponse = await axios.post(
+                    'http://api:5000/api/videos/upload',
+                    form,
+                    {
+                        headers: {
+                            ...form.getHeaders(),
+                            'Content-Length': form.getLengthSync()
+                        },
+                        maxContentLength: 50 * 1024 * 1024,
+                        maxBodyLength: 50 * 1024 * 1024
+                    }
+                );
+
+                const welcomeData = {
+                    title: userState[chatId].welcomeTitle,
+                    description: userState[chatId].welcomeDescription,
+                    photo: userState[chatId].welcomePhoto,
+                    video: uploadResponse.data.video.filename
+                };
+
+                await axios.post('http://api:5000/api/welcome', welcomeData);
+                await sendMessageWithDelete(chatId, '✅ Приветствие успешно создано с фото и видео!');
+
+                setTimeout(async () => {
+                    const welcomeMenu = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [{ text: '➕ Новое', callback_data: 'add_welcome' }],
+                                [{ text: '📋 Все приветствия', callback_data: 'view_welcomes' }],
+                                [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                            ],
+                        }),
+                    };
+                    await sendMessageWithDelete(chatId, 'Управление приветствиями:', welcomeMenu);
+                }, 1000);
+
+                delete userState[chatId];
+            } catch (error) {
+                console.error('Error uploading welcome video:', error);
+                await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке видео. Попробуйте еще раз или напишите "пропустить".');
+            }
+        } else {
+            await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте видео или напишите "пропустить".');
+        }
+    }
     // Обработка загрузки изображения
     // Обработка фото
     if (userState[chatId]?.step === 'add_product_media' && msg.photo) {
@@ -1566,7 +1882,7 @@ bot.on('message', async (msg) => {
             return;
         }
     }
-// Обработка загрузки видео или пропуска
+    // Обработка загрузки видео или пропуска
     if (userState[chatId]?.step === 'waiting_for_video') {
         logDebug('Video Handler', 'Processing video step', {
             messageTypes: messageDebug.contentTypes,
