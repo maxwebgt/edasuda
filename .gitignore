@@ -9,3 +9,4 @@ wal/*
 .idea/
 .env
 coverage/
+loki/data/*

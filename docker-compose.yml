@@ -103,8 +103,11 @@ services:
     networks:
       - monitoring
     restart: unless-stopped
+    labels:
+      com.docker.compose.service: "pm2"
+      logging: "promtail"
     logging:
-      driver: "json-file"  # Используем стандартный драйвер как fallback
+      driver: "json-file"
       options:
         max-size: "10m"
         max-file: "3"
