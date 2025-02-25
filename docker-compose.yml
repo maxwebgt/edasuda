@@ -60,7 +60,26 @@ services:
       - mongo
     networks:
       - monitoring
-
+  mongodb_exporter:
+    image: bitnami/mongodb-exporter:latest
+    container_name: mongodb_exporter
+    command:
+      - '--web.listen-address=:9216'
+      - '--collect-all'
+    environment:
+      - MONGODB_URI=${MONGODB_URI}/admin?directConnection=true
+    ports:
+      - "9216:9216"
+    networks:
+      - monitoring
+    depends_on:
+      - mongo
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "wget", "-q", "--spider", "http://localhost:9216/metrics" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
   tg_bot:
     build:
       context: ./tg_bot
@@ -90,6 +109,8 @@ services:
       - '--storage.tsdb.path=/prometheus'
       - '--web.console.libraries=/usr/share/prometheus/console_libraries'
       - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--log.level=debug'
     ports:
       - "9090:9090"
     networks:
@@ -106,7 +127,7 @@ services:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_USERS_ALLOW_SIGN_UP=false
-      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_SESSION_PROVIDER=memory
     ports:
       - "3000:3000"

@@ -24,6 +24,108 @@ const express = require('express');
 const FormData = require('form-data');
 const app = express();
 
+// Добавляем импорты для метрик
+const promClient = require('prom-client');
+const promBundle = require('express-prom-bundle');
+
+// Создаем Registry для Prometheus
+const register = new promClient.Registry();
+// Настраиваем метрики по умолчанию
+promClient.collectDefaultMetrics({
+    register,
+    prefix: 'bot_',
+    timestamps: true,
+    timeout: 10000
+});
+
+// Создаем кастомные метрики
+const metricsBundle = promBundle({
+    includeMethod: true,
+    includePath: true,
+    includeStatusCode: true,
+    includeUp: true,
+    customLabels: { project: 'telegram_bot' },
+    promClient: {
+        collectDefaultMetrics: {
+            timestamps: true
+        }
+    }
+});
+
+// Определяем метрики
+const botMetrics = {
+    commandsCounter: new promClient.Counter({
+        name: 'bot_commands_total',
+        help: 'Total number of bot commands',
+        labelNames: ['command', 'user_id']
+    }),
+
+    messageProcessingTime: new promClient.Histogram({
+        name: 'bot_message_processing_seconds',
+        help: 'Time spent processing messages',
+        labelNames: ['type'],
+        buckets: [0.1, 0.5, 1, 2, 5, 10]
+    }),
+
+    activeUsers: new promClient.Gauge({
+        name: 'bot_active_users',
+        help: 'Number of active users in the last 5 minutes'
+    }),
+
+    ordersTotal: new promClient.Counter({
+        name: 'bot_orders_total',
+        help: 'Total number of orders',
+        labelNames: ['status']
+    }),
+
+    productsViewed: new promClient.Counter({
+        name: 'bot_products_viewed_total',
+        help: 'Total number of product views',
+        labelNames: ['product_id']
+    }),
+
+    errorCounter: new promClient.Counter({
+        name: 'bot_errors_total',
+        help: 'Total number of errors',
+        labelNames: ['type']
+    })
+};
+
+// Регистрируем метрики
+Object.values(botMetrics).forEach(metric => register.registerMetric(metric));
+
+// Применяем middleware для метрик
+app.use(metricsBundle);
+
+// Эндпоинт для метрик Prometheus
+app.get('/metrics', async (req, res) => {
+    res.set('Content-Type', register.contentType);
+    res.end(await register.metrics());
+});
+
+// Функция для обновления активных пользователей
+const updateActiveUsers = () => {
+    const now = Date.now();
+    const activeCount = Object.keys(userState).filter(chatId => {
+        const lastActivity = userState[chatId]?.lastActivity || 0;
+        return (now - lastActivity) < 5 * 60 * 1000; // 5 минут
+    }).length;
+    botMetrics.activeUsers.set(activeCount);
+};
+
+// Обновляем активных пользователей каждую минуту
+setInterval(updateActiveUsers, 60000);
+
+// Функция для отслеживания времени выполнения
+const trackExecutionTime = async (func, labels) => {
+    const end = botMetrics.messageProcessingTime.startTimer();
+    try {
+        return await func();
+    } finally {
+        end(labels);
+    }
+};
+
 // Get the Telegram Bot Token from environment variables
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -194,7 +296,16 @@ async function sendMessageWithDelete(chatId, text, options = {}) {
         throw error;
     }
 }
-
+// Модифицируем функцию отправки сообщений для отслеживания ошибок
+const originalSendMessageWithDelete = sendMessageWithDelete;
+sendMessageWithDelete = async (chatId, text, options = {}) => {
+    try {
+        return await originalSendMessageWithDelete(chatId, text, options);
+    } catch (error) {
+        botMetrics.errorCounter.inc({ type: 'send_message' });
+        throw error;
+    }
+};
 /**
  * Sends a photo to a chat and deletes the last sent message (if exists).
  */
@@ -349,1082 +460,717 @@ bot.onText(/\/start/, async (msg) => {
 bot.on('callback_query', async (callbackQuery) => {
     const chatId = callbackQuery.message.chat.id;
     const data = callbackQuery.data;
-    console.log(`Received callback query from ${chatId}: ${data}`);
 
-    if (data.startsWith('view_order_')) {
-        const orderId = data.split('_')[2];
-        console.log(`[Order View] Viewing order with id: ${orderId}`);
-        let orderDetails;
+    await trackExecutionTime(async () => {
         try {
-            const response = await axios.get(`http://api:5000/api/orders/${orderId}`);
-            orderDetails = response.data;
-            console.log(`[Order View] Retrieved order details:`, orderDetails);
-        } catch (error) {
-            console.error(`[Order View] Error fetching details for order ${orderId}:`, error.message);
-            await sendMessageWithDelete(chatId, `Ошибка: не удалось получить данные заказа ${orderId}`);
-            return;
-        }
-        const order = orderDetails.order || orderDetails;
-        console.log('[Order View] Using order object:', order);
 
-        // Форматируем дату создания
-        const orderDate = order.createdAt ? new Date(order.createdAt).toLocaleString('ru-RU', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        }) : 'Дата не указана';
+            console.log(`Received callback query from ${chatId}: ${data}`);
 
-        let detailsText = `📅 Дата заказа: ${orderDate}\n`;
-        detailsText += `🔢 Заказ №${order._id}\n`;
-        detailsText += `📊 Статус: ${order.status}\n`;
-        detailsText += `💰 Сумма: ${order.totalAmount} ₽\n`;
-        detailsText += `📍 Адрес доставки: ${order.shippingAddress}\n`;
-        if (order.phone) detailsText += `📱 Телефон: ${order.phone}\n`;
-        if (order.description) detailsText += `💭 Описание: ${order.description}\n`;
-        if (order.paymentStatus) detailsText += `💳 Статус оплаты: ${order.paymentStatus}\n`;
-        if (order.paymentMethod) detailsText += `💵 Метод оплаты: ${order.paymentMethod}\n`;
-        if (order.contactEmail) detailsText += `📧 Email: ${order.contactEmail}\n`;
-        if (order.contactPhone) detailsText += `📞 Контактный телефон: ${order.contactPhone}\n`;
+            if (data.startsWith('view_order_')) {
+                const orderId = data.split('_')[2];
+                console.log(`[Order View] Viewing order with id: ${orderId}`);
+                let orderDetails;
+                try {
+                    const response = await axios.get(`http://api:5000/api/orders/${orderId}`);
+                    orderDetails = response.data;
+                    console.log(`[Order View] Retrieved order details:`, orderDetails);
+                } catch (error) {
+                    console.error(`[Order View] Error fetching details for order ${orderId}:`, error.message);
+                    await sendMessageWithDelete(chatId, `Ошибка: не удалось получить данные заказа ${orderId}`);
+                    return;
+                }
+                const order = orderDetails.order || orderDetails;
+                console.log('[Order View] Using order object:', order);
 
-        if (order.statusHistory && order.statusHistory.length > 0) {
-            detailsText += `\n📝 История статусов:\n`;
-            order.statusHistory.forEach((hist, index) => {
-                const histDate = new Date(hist.timestamp).toLocaleString('ru-RU', {
+                // Форматируем дату создания
+                const orderDate = order.createdAt ? new Date(order.createdAt).toLocaleString('ru-RU', {
                     year: 'numeric',
                     month: '2-digit',
                     day: '2-digit',
                     hour: '2-digit',
                     minute: '2-digit'
-                });
-                detailsText += `   ${index + 1}. ${hist.status} (${histDate})\n`;
-            });
-        }
-
-        if (order.products && order.products.length > 0) {
-            detailsText += `\n📦 Состав заказа:\n`;
-            try {
-                const productPromises = order.products.map(prod =>
-                    axios.get(`http://api:5000/api/products/${prod.productId}`)
-                        .then(res => ({
-                            name: res.data.name,
-                            quantity: prod.quantity,
-                            price: prod.price
-                        }))
-                        .catch(err => ({
-                            name: 'Неизвестный продукт',
-                            quantity: prod.quantity,
-                            price: prod.price
-                        }))
-                );
-                const productDetails = await Promise.all(productPromises);
-                productDetails.forEach((p, index) => {
-                    detailsText += `\n   🔸 ${index + 1}. ${p.name}\n`;
-                    detailsText += `      📊 Количество: ${p.quantity} шт\n`;
-                    detailsText += `      💵 Цена за шт: ${p.price} ₽\n`;
-                    detailsText += `      💰 Итого: ${p.price * p.quantity} ₽\n`;
-                });
-            } catch (error) {
-                console.error('Error fetching product details:', error);
-            }
-        }
-
-        if (order.deliveryInfo && order.deliveryInfo.deliveryInstructions) {
-            detailsText += `\n🚚 Инструкция по доставке:\n${order.deliveryInfo.deliveryInstructions}\n`;
-        }
-
-        // Для "My orders" показываем только кнопки обновления статуса
-        // Для обычных заказов добавляем кнопку "Отменить заказ"
-        if (userState[chatId] && userState[chatId].orderListType === 'my_orders') {
-            const statuses = [
-                'Новый',
-                'Принят в работу',
-                'Готовится',
-                'Готов к отправке',
-                'В доставке',
-                'Доставлен',
-                'Завершён',
-                'Отменён',
-                'Возврат'
-            ];
-            const inlineStatusButtons = [];
-            for (let i = 0; i < statuses.length; i += 3) {
-                const row = statuses.slice(i, i + 3).map(status => {
-                    const shortStatus = statusMap[status] || status;
-                    const callbackData = `update_status::${order._id}::${shortStatus}`;
-                    console.log(`[Status Button] Generated callback_data: "${callbackData}", length: ${callbackData.length}, byte length: ${getByteLength(callbackData)}`);
-                    return { text: status, callback_data: callbackData };
-                });
-                inlineStatusButtons.push(row);
-            }
-            inlineStatusButtons.push([{ text: '⬅️ Назад', callback_data: 'my_orders' }]);
-            const inlineKeyboard = { inline_keyboard: inlineStatusButtons };
-            await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
-        } else {
-            const inlineKeyboard = {
-                inline_keyboard: [
-                    [{ text: '❌ Отменить заказ', callback_data: `cancel_order_${order._id}` }],
-                    [{ text: '⬅️ Назад', callback_data: 'orders_list' }]
-                ]
-            };
-            await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
-        }
-    }
-    else if (data.startsWith('update_status::')) {
-        const parts = data.split("::");
-        if (parts.length >= 3) {
-            const orderId = parts[1];
-            const newStatusCode = parts.slice(2).join("::");
-            const userFriendlyStatus = Object.keys(statusMap)
-                .find(key => statusMap[key] === newStatusCode) || newStatusCode;
-
-            console.log(`[Обновление статуса] Обработка изменения статуса заказа ${orderId}`);
-            console.log(`[Обновление статуса] Новый статус: "${userFriendlyStatus}" (код: ${newStatusCode})`);
-            console.log(`[Обновление статуса] Изменение инициировано пользователем: ${chatId}`);
-
-            try {
-                // Получаем текущий заказ до обновления
-                const currentOrderResponse = await axios.get(`http://api:5000/api/orders/${orderId}`);
-                const currentOrder = currentOrderResponse.data.order || currentOrderResponse.data;
-                console.log(`[Обновление статуса] Текущее состояние заказа:`, currentOrder);
-
-                // Получаем информацию об инициаторе изменений
-                const initiator = {
-                    chatId: chatId.toString(),
-                    isChef: currentOrder.chefId === chatId.toString(),
-                    isClient: currentOrder.clientId === chatId.toString(),
-                };
-                console.log(`[Обновление статуса] Инициатор изменения:`, initiator);
-
-                // Обновляем статус заказа
-                const updateResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, {
-                    status: userFriendlyStatus
-                });
-                const updatedOrder = updateResponse.data.order || updateResponse.data;
-                console.log(`[Обновление статуса] Заказ успешно обновлен:`, updatedOrder);
-
-                // Получаем информацию о продуктах
-                const productPromises = currentOrder.products.map(async prod => {
-                    try {
-                        const productResponse = await axios.get(`http://api:5000/api/products/${prod.productId}`);
-                        return {
-                            ...prod,
-                            name: productResponse.data.name,
-                            chefId: productResponse.data.chefId
-                        };
-                    } catch (err) {
-                        console.error(`[Обновление статуса] Ошибка получения информации о продукте ${prod.productId}:`, err.message);
-                        return prod;
-                    }
-                });
-
-                const products = await Promise.all(productPromises);
-                console.log(`[Обновление статуса] Информация о продуктах:`, products);
-
-                // Формируем базовое уведомление
-                const timestamp = new Date().toLocaleString('ru-RU', {
-                    timeZone: 'Europe/Moscow',
-                    day: '2-digit',
-                    month: '2-digit',
-                    year: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                });
-
-                const baseNotification =
-                    `🔄 Обновление статуса заказа\n\n` +
-                    `📦 Заказ №${orderId.slice(-4)}\n` +
-                    `📝 Новый статус: ${userFriendlyStatus}\n` +
-                    `🕒 Время изменения: ${timestamp}\n\n` +
-                    `💰 Сумма заказа: ${updatedOrder.totalAmount} ₽\n` +
-                    `📍 Адрес доставки: ${updatedOrder.shippingAddress}\n\n` +
-                    `📋 Состав заказа:\n`;
-
-                // Добавляем информацию о продуктах
-                const productsInfo = products.map((prod, index) =>
-                    `${index + 1}. ${prod.name || 'Товар'} x${prod.quantity} — ${prod.price} ₽`
-                ).join('\n');
-
-                // Определяем роль инициатора для уведомлений
-                let initiatorRole = 'Пользователь';
-                if (initiator.isChef) initiatorRole = 'Повар';
-                else if (initiator.isClient) initiatorRole = 'Клиент';
-
-                // Отправляем уведомление клиенту
-                if (updatedOrder.clientId) {
-                    const clientNotification =
-                        `${baseNotification}${productsInfo}\n\n` +
-                        `${initiator.isClient ? '🔔 Вы изменили' : `👨‍🍳 ${initiatorRole} изменил`} статус вашего заказа\n` +
-                        `💬 Комментарий: ${updatedOrder.description || 'Нет'}\n` +
-                        `📞 Телефон повара: ${updatedOrder.chefPhone || 'Не указан'}`;
-
-                    try {
-                        await bot.sendMessage(updatedOrder.clientId, clientNotification);
-                        console.log(`[Обновление статуса] ✅ Уведомление отправлено клиенту ${updatedOrder.clientId}`);
-                    } catch (error) {
-                        console.error(`[Обновление статуса] ❌ Ошибка отправки уведомления клиенту ${updatedOrder.clientId}:`, error.message);
-                    }
-                }
-
-                // Отправляем уведомление поварам
-                const uniqueChefIds = [...new Set(products.map(p => p.chefId))];
-                console.log(`[Обновление статуса] Найдены повара для уведомления:`, uniqueChefIds);
-
-                for (const chefId of uniqueChefIds) {
-                    if (chefId) {
-                        const chefNotification =
-                            `${baseNotification}${productsInfo}\n\n` +
-                            `${chefId === initiator.chatId ? '🔔 Вы изменили' : `👤 ${initiatorRole} изменил`} статус заказа\n` +
-                            `💬 Дополнительная информация: ${updatedOrder.description || 'Нет'}\n` +
-                            `📱 Контакты клиента:\n` +
-                            `   Телефон: ${updatedOrder.contactPhone || 'Не указан'}\n` +
-                            `   Telegram: ${updatedOrder.telegramId ? '@' + updatedOrder.telegramId : 'Не указан'}`;
-
-                        try {
-                            await bot.sendMessage(chefId, chefNotification);
-                            console.log(`[Обновление статуса] ✅ Уведомление отправлено повару ${chefId}`);
-                        } catch (error) {
-                            console.error(`[Обновление статуса] ❌ Ошибка отправки уведомления повару ${chefId}:`, error.message);
-                        }
-                    }
-                }
-
-                // Подтверждение в чат, где было произведено изменение
-                await sendMessageWithDelete(chatId, `Статус заказа №${orderId.slice(-4)} изменен на "${userFriendlyStatus}"`);
-
-            } catch (error) {
-                console.error(`[Обновление статуса] Ошибка:`, error.message);
-                if (error.response?.data) {
-                    console.error(`[Обновление статуса] Ошибка API:`, error.response.data);
-                }
-                await sendMessageWithDelete(chatId, `Ошибка обновления статуса заказа №${orderId.slice(-4)}`);
-            }
-        }
-    }
-    else if (data === 'welcome_menu') {
-        const welcomeMenu = {
-            reply_markup: JSON.stringify({
-                inline_keyboard: [
-                    [{ text: '➕ Новое', callback_data: 'add_welcome' }],
-                    [{ text: '📋 Все приветствия', callback_data: 'view_welcomes' }],
-                    [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
-                ],
-            }),
-        };
-        await sendMessageWithDelete(chatId, 'Управление приветствиями:', welcomeMenu);
-    }
-    else if (data === 'add_welcome') {
-        userState[chatId] = { step: 'add_welcome_title' };
-        await sendMessageWithDelete(chatId, 'Введите заголовок приветствия:');
-    }
-    else if (data === 'view_welcomes') {
-        try {
-            const response = await axios.get('http://api:5000/api/welcome');
-            const welcomes = response.data;
-
-            if (welcomes.length === 0) {
-                await sendMessageWithDelete(chatId, 'Приветствия пока не созданы.');
-                return;
-            }
-
-            let messageText = '📋 Список приветствий:\n\n';
-
-            welcomes.forEach((welcome, index) => {
-                messageText += `${index + 1}. ${welcome.title || 'Без названия'}\n`;
-                if (welcome.description) {
-                    messageText += `📝 ${welcome.description}\n`;
-                }
-                messageText += '\n';
-            });
-
-            const inlineKeyboard = welcomes.map(welcome => ([{
-                text: welcome.title || 'Без названия',
-                callback_data: `view_welcome_${welcome._id}`
-            }]));
-
-            inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'welcome_menu' }]);
-
-            await sendMessageWithDelete(chatId, messageText, {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: inlineKeyboard
-                })
-            });
-        } catch (error) {
-            console.error('Error fetching welcomes:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка приветствий.');
-        }
-    }
-    else if (data.startsWith('toggle_welcome_status_')) {
-        try {
-            const [, , welcomeId, newStatus] = data.split('_');
-            const isActive = newStatus === 'true';
-
-            // Обновляем статус приветствия
-            await axios.put(`http://api:5000/api/welcome/${welcomeId}`, {
-                isActive: isActive
-            });
-
-            await sendMessageWithDelete(chatId,
-                `Статус приветствия успешно ${isActive ? 'активирован ✅' : 'деактивирован ❌'}!`
-            );
-
-            // Перезагружаем детали приветствия через небольшую задержку
-            setTimeout(() => {
-                bot.emit('callback_query', {
-                    message: { chat: { id: chatId } },
-                    data: `view_welcome_${welcomeId}`
-                });
-            }, 1000);
-
-        } catch (error) {
-            console.error('Error toggling welcome status:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при изменении статуса приветствия.');
-        }
-    }
-    else if (data.startsWith('view_welcome_')) {
-        try {
-            const welcomeId = data.split('view_welcome_')[1];
-            const response = await axios.get(`http://api:5000/api/welcome/${welcomeId}`);
-            const welcome = response.data;
-
-            let messageText = `📝 Приветствие\n\n`;
-            if (welcome.title) messageText += `📌 Заголовок: ${welcome.title}\n`;
-            if (welcome.description) messageText += `📄 Описание: ${welcome.description}\n`;
-            messageText += `📊 Статус: ${welcome.isActive ? 'Активно ✅' : 'Неактивно ❌'}\n`;
-
-            const keyboard = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [{
-                            text: welcome.isActive ? '❌ Деактивировать' : '✅ Активировать',
-                            callback_data: `toggle_welcome_${welcomeId}_${!welcome.isActive}`
-                        }],
-                        [{ text: '🗑 Удалить', callback_data: `delete_welcome_${welcomeId}` }],
-                        [{ text: '⬅️ Назад', callback_data: 'view_welcomes' }]
-                    ]
-                })
-            };
-
-            // Если есть видео, показываем видео
-            if (welcome.video) {
-                try {
-                    // Удаляем предыдущее сообщение
-                    if (lastBotMessages[chatId]) {
-                        try {
-                            await bot.deleteMessage(chatId, lastBotMessages[chatId]);
-                        } catch (error) {
-                            console.log('Error deleting previous message:', error);
-                        }
-                    }
-
-                    // Получаем видео
-                    const videoResponse = await axios.get(
-                        `http://api:5000/api/videos/${welcome.video}`,
-                        { responseType: 'arraybuffer' }
-                    );
-
-                    // Отправляем видео с подписью
-                    const message = await bot.sendVideo(chatId, Buffer.from(videoResponse.data), {
-                        caption: messageText,
-                        ...keyboard
-                    });
-
-                    if (message) {
-                        lastBotMessages[chatId] = message.message_id;
-                    }
-                } catch (error) {
-                    console.error('Error loading welcome video:', error);
-                    await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке видео.');
-                }
-            }
-            // Если нет видео, но есть фото
-            else if (welcome.photo) {
-                try {
-                    const photoResponse = await axios.get(
-                        `http://api:5000/api/images/file/${welcome.photo}`,
-                        { responseType: 'arraybuffer' }
-                    );
-
-                    // Отправляем фото с подписью
-                    await sendPhotoWithDelete(chatId, Buffer.from(photoResponse.data), {
-                        caption: messageText,
-                        ...keyboard
-                    });
-                } catch (error) {
-                    console.error('Error loading welcome photo:', error);
-                    await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке фото.');
-                }
-            }
-            // Если нет ни видео, ни фото
-            else {
-                await sendMessageWithDelete(chatId, messageText, keyboard);
-            }
-        } catch (error) {
-            console.error('Error fetching welcome details:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей приветствия.');
-        }
-    }
-    else if (data.startsWith('toggle_welcome_')) {
-        try {
-            const [, , welcomeId, newStatus] = data.split('_');
-            const isActive = newStatus === 'true';
-
-            console.log(`[toggle_welcome] Toggling welcome status for ID: ${welcomeId}, new status: ${isActive}`);
-
-            if (isActive) {
-                // Сначала деактивируем все приветствия
-                console.log('[toggle_welcome] Деактивация всех приветствий');
-                await axios.put('http://api:5000/api/welcome/deactivate-all', {});
-
-                // Затем активируем только выбранное приветствие
-                console.log(`[toggle_welcome] Активация приветствия ${welcomeId}`);
-                await axios.put(`http://api:5000/api/welcome/${welcomeId}`, {
-                    isActive: true
-                });
-
-                await sendMessageWithDelete(chatId,
-                    '✅ Приветствие успешно активировано! Все остальные приветствия деактивированы.'
-                );
-            } else {
-                // Просто деактивируем текущее приветствие
-                console.log(`[toggle_welcome] Деактивация приветствия ${welcomeId}`);
-                await axios.put(`http://api:5000/api/welcome/${welcomeId}`, {
-                    isActive: false
-                });
-
-                await sendMessageWithDelete(chatId,
-                    '❌ Приветствие деактивировано!'
-                );
-            }
-
-            // Перезагружаем список приветствий
-            setTimeout(() => {
-                bot.emit('callback_query', {
-                    message: { chat: { id: chatId } },
-                    data: 'view_welcomes'
-                });
-            }, 1000);
-
-        } catch (error) {
-            console.error('Error toggling welcome status:', error);
-            console.error('Error details:', error.response?.data);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при изменении статуса приветствия.');
-        }
-    }
-    else if (data.startsWith('delete_welcome_')) {
-        try {
-            const welcomeId = data.split('delete_welcome_')[1];
-            await axios.delete(`http://api:5000/api/welcome/${welcomeId}`);
-            await sendMessageWithDelete(chatId, 'Приветствие успешно удалено!');
-            setTimeout(() => {
-                bot.emit('callback_query', {
-                    message: { chat: { id: chatId } },
-                    data: 'view_welcomes'
-                });
-            }, 1000);
-        } catch (error) {
-            console.error('Error deleting welcome:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении приветствия.');
-        }
-    }
-    else if (data.startsWith('confirm_delete_welcome_')) {
-        try {
-            const welcomeId = data.split('confirm_delete_welcome_')[1];
-            await axios.delete(`http://api:5000/api/welcome/${welcomeId}`);
-            await sendMessageWithDelete(chatId, 'Приветствие успешно удалено!');
-            setTimeout(() => {
-                bot.emit('callback_query', {
-                    message: { chat: { id: chatId } },
-                    data: 'view_welcomes'
-                });
-            }, 1000);
-        } catch (error) {
-            console.error('Error deleting welcome:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении приветствия.');
-        }
-    }
-    else if (data === 'news_menu') {
-        const newsMenu = {
-            reply_markup: JSON.stringify({
-                inline_keyboard: [
-                    [{ text: '📰 Все новости', callback_data: 'view_news' }],
-                    [{ text: '➕ Добавить новость', callback_data: 'add_news' }],
-                    [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
-                ],
-            }),
-        };
-        await sendMessageWithDelete(chatId, 'Управление новостями:', newsMenu);
-    }
-    else if (data === 'view_news') {
-        try {
-            const response = await axios.get('http://api:5000/api/news');
-            const news = response.data;
-
-            if (news.length === 0) {
-                await sendMessageWithDelete(chatId, 'Пока нет новостей.');
-                return;
-            }
-
-            let newsList = 'Список новостей:\n\n';
-            newsList += 'Нажмите на новость для подробной информации:\n';
-
-            const inlineKeyboard = news.map(item => ([{
-                text: item.title,
-                callback_data: `view_news_${item._id}`
-            }]));
-
-            inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'news_menu' }]);
-
-            const keyboard = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: inlineKeyboard
-                })
-            };
-
-            await sendMessageWithDelete(chatId, newsList, keyboard);
-        } catch (error) {
-            console.error('Error fetching news:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка новостей.');
-        }
-    }
-    else if (data === 'add_news') {
-        userState[chatId] = { step: 'add_news_title' };
-        await sendMessageWithDelete(chatId, 'Введите заголовок новости:');
-    }
-    // Обработчик публикации новости и массовой рассылки
-    else if (data.startsWith('publish_news_')) {
-        try {
-            const newsId = data.split('publish_news_')[1];
-
-            // Получаем данные новости
-            const newsResponse = await axios.get(`http://api:5000/api/news/${newsId}`);
-            const news = newsResponse.data;
-
-            // Получаем список всех пользователей
-            const usersResponse = await axios.get('http://api:5000/api/users');
-            const users = usersResponse.data;
-
-            // Формируем текст рассылки
-            const broadcastMessage = `📢 Новая новость!\n\n` +
-                `📰 ${news.title}\n\n` +
-                `${news.content}\n\n` +
-                `📅 ${new Date().toLocaleDateString()}`;
-
-            // Счетчики для статистики рассылки
-            let successCount = 0;
-            let failCount = 0;
-
-            // Отправляем новость каждому пользователю
-            for (const user of users) {
-                if (user.telegramId) {
-                    try {
-                        await bot.sendMessage(user.telegramId, broadcastMessage);
-                        successCount++;
-                    } catch (error) {
-                        console.error(`Failed to send news to user ${user.telegramId}:`, error);
-                        failCount++;
-                    }
-                    // Небольшая задержка между отправками, чтобы не превысить лимиты Telegram
-                    await new Promise(resolve => setTimeout(resolve, 50));
-                }
-            }
-
-            // Обновляем статус новости
-            await axios.put(`http://api:5000/api/news/${newsId}`, {
-                status: 'published'
-            });
-
-            // Отправляем отчет о рассылке
-            const reportMessage = `✅ Новость успешно опубликована!\n\n` +
-                `📊 Статистика рассылки:\n` +
-                `✓ Успешно отправлено: ${successCount}\n` +
-                `✗ Ошибок отправки: ${failCount}`;
-
-            await sendMessageWithDelete(chatId, reportMessage);
-
-            // Возвращаемся к просмотру новости через небольшую задержку
-            setTimeout(() => {
-                bot.emit('callback_query', {
-                    message: { chat: { id: chatId } },
-                    data: `view_news_${newsId}`
-                });
-            }, 2000);
-
-        } catch (error) {
-            console.error('Error publishing news:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при публикации новости.');
-        }
-    }
-    else if (data.startsWith('view_news_')) {
-        try {
-            const newsId = data.split('view_news_')[1];
-            const response = await axios.get(`http://api:5000/api/news/${newsId}`);
-            const news = response.data;
-
-            let newsDetails = `📰 ${news.title}\n\n`;
-            newsDetails += `${news.content}\n\n`;
-            newsDetails += `📅 Дата: ${new Date(news.createdAt).toLocaleDateString()}\n`;
-            newsDetails += `📊 Статус: ${news.status === 'active' ? 'Черновик' : 'Опубликовано'}\n`;
-
-            const keyboard = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [
-                            news.status === 'active' ?
-                                { text: '📢 Опубликовать', callback_data: `publish_news_${newsId}` } :
-                                { text: '✅ Опубликовано', callback_data: 'no_action' },
-                            { text: '🗑 Удалить', callback_data: `delete_news_${newsId}` }
-                        ],
-                        [{ text: '⬅️ Назад к списку', callback_data: 'view_news' }]
-                    ]
-                })
-            };
-
-            await sendMessageWithDelete(chatId, newsDetails, keyboard);
-        } catch (error) {
-            console.error('Error fetching news details:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей новости.');
-        }
-    }
-    else if (data.startsWith('delete_news_')) {
-        try {
-            const newsId = data.split('delete_news_')[1];
-            const confirmKeyboard = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [
-                            { text: '✅ Да, удалить', callback_data: `confirm_delete_news_${newsId}` },
-                            { text: '❌ Отмена', callback_data: `view_news_${newsId}` }
-                        ]
-                    ]
-                })
-            };
-            await sendMessageWithDelete(chatId, 'Вы уверены, что хотите удалить эту новость?', confirmKeyboard);
-        } catch (error) {
-            console.error('Error preparing news deletion:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при подготовке к удалению новости.');
-        }
-    }
-    else if (data.startsWith('confirm_delete_news_')) {
-        try {
-            const newsId = data.split('confirm_delete_news_')[1];
-            await axios.delete(`http://api:5000/api/news/${newsId}`);
-            await sendMessageWithDelete(chatId, 'Новость успешно удалена!');
-            setTimeout(() => bot.emit('callback_query', { message: { chat: { id: chatId } }, data: 'view_news' }), 1000);
-        } catch (error) {
-            console.error('Error deleting news:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении новости.');
-        }
-    }
-    else if (data === 'expenses_menu') {
-        const expensesMenu = {
-            reply_markup: JSON.stringify({
-                inline_keyboard: [
-                    [{ text: '📊 Все расходы', callback_data: 'view_expenses' }],
-                    [{ text: '➕ Добавить расход', callback_data: 'add_expense' }],
-                    [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
-                ],
-            }),
-        };
-        await sendMessageWithDelete(chatId, 'Управление расходами:', expensesMenu);
-    }
-    else if (data === 'view_expenses') {
-        try {
-            const response = await axios.get(`http://api:5000/api/expenses/chef/${chatId}`);
-            const expenses = response.data;
-
-            if (expenses.length === 0) {
-                await sendMessageWithDelete(chatId, 'У вас пока нет расходов.');
-                return;
-            }
-
-            // Подсчитываем общую сумму расходов
-            const totalAmount = expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
-
-            let expensesList = 'Ваши расходы:\n\n';
-            expensesList += `💵 Общая сумма расходов: ${totalAmount} ₽\n\n`;
-            expensesList += 'Нажмите на расход для подробной информации:\n';
-
-            // Создаем клавиатуру, где каждый расход - отдельная кнопка
-            const inlineKeyboard = expenses.map(expense => ([{
-                text: `${expense.title} - ${expense.amount} ₽`,
-                callback_data: `view_expense_${expense._id}`
-            }]));
-
-            // Добавляем кнопку "Назад"
-            inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'expenses_menu' }]);
-
-            const keyboard = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: inlineKeyboard
-                })
-            };
-
-            await sendMessageWithDelete(chatId, expensesList, keyboard);
-        } catch (error) {
-            console.error('Error fetching expenses:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка расходов.');
-        }
-    }
-    else if (data === 'add_expense') {
-        userState[chatId] = { step: 'add_expense_title' };
-        await sendMessageWithDelete(chatId, 'Введите название расхода:');
-    }
-    else if (data === 'back_to_management') {
-        // Возврат к меню управления
-        const managementMenu = {
-            reply_markup: JSON.stringify({
-                inline_keyboard: [
-                    [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
-                    [
-                        { text: '💰 Расходы', callback_data: 'expenses_menu' },
-                        { text: '💵 Доходы', callback_data: 'income_menu' }
-                    ],
-                    [{ text: '📰 Новости', callback_data: 'news_menu' }],
-                    [{ text: '👋 Приветствие', callback_data: 'welcome_menu' }], // Добавляем новую кнопку
-                    [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
-                    [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
-                ],
-            }),
-        };
-        await sendMessageWithDelete(chatId, 'Панель управления:', managementMenu);
-    }
-    else if (data === 'income_menu') {
-        try {
-            console.log(`[Income] Запрашиваем заказы для повара ${chatId}`);
-            const response = await axios.get(`http://api:5000/api/orders/chef/${chatId}`);
-            console.log('[Income] Получен ответ от API:', JSON.stringify(response.data, null, 2));
-
-            const orders = response.data.orders || [];
-            console.log(`[Income] Количество заказов: ${orders.length}`);
-
-            if (!orders || orders.length === 0) {
-                await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
-                return;
-            }
-
-            let totalIncome = 0;
-            let incomeMessage = '💵 Ваши доходы:\n\n';
-            const ordersByMonth = {};
-
-            for (const order of orders) {
-                console.log(`[Income] Обработка заказа ${order._id}`);
-                console.log(`[Income] Статус заказа: ${order.status}`);
-
-                // Проверяем, что заказ принадлежит этому повару
-                if (order.chefId === chatId.toString()) {
-                    const date = new Date(order.createdAt);
-                    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-
-                    if (!ordersByMonth[monthKey]) {
-                        ordersByMonth[monthKey] = {
-                            orders: [],
-                            total: 0
-                        };
-                    }
-
-                    // Получаем информацию о продуктах с их названиями
-                    const productsWithDetails = await Promise.all(order.products.map(async (product) => {
-                        try {
-                            const productResponse = await axios.get(`http://api:5000/api/products/${product.productId}`);
-                            return {
-                                ...product,
-                                name: productResponse.data.name // Добавляем название продукта
-                            };
-                        } catch (err) {
-                            console.error(`[Income] Ошибка получения информации о продукте ${product.productId}:`, err.message);
-                            return {
-                                ...product,
-                                name: 'Неизвестный продукт'
-                            };
-                        }
-                    }));
-
-                    const orderIncome = productsWithDetails.reduce((sum, product) => {
-                        const productTotal = product.price * product.quantity;
-                        console.log(`[Income] Доход с продукта ${product.name}: ${productTotal} (цена: ${product.price}, количество: ${product.quantity})`);
-                        return sum + productTotal;
-                    }, 0);
-
-                    console.log(`[Income] Доход с заказа: ${orderIncome}`);
-
-                    if (orderIncome > 0) {
-                        ordersByMonth[monthKey].orders.push({
-                            id: order._id,
-                            date: date.toLocaleDateString('ru-RU'),
-                            products: productsWithDetails, // Теперь здесь есть названия продуктов
-                            total: orderIncome,
-                            status: order.status
+                }) : 'Дата не указана';
+
+                let detailsText = `📅 Дата заказа: ${orderDate}\n`;
+                detailsText += `🔢 Заказ №${order._id}\n`;
+                detailsText += `📊 Статус: ${order.status}\n`;
+                detailsText += `💰 Сумма: ${order.totalAmount} ₽\n`;
+                detailsText += `📍 Адрес доставки: ${order.shippingAddress}\n`;
+                if (order.phone) detailsText += `📱 Телефон: ${order.phone}\n`;
+                if (order.description) detailsText += `💭 Описание: ${order.description}\n`;
+                if (order.paymentStatus) detailsText += `💳 Статус оплаты: ${order.paymentStatus}\n`;
+                if (order.paymentMethod) detailsText += `💵 Метод оплаты: ${order.paymentMethod}\n`;
+                if (order.contactEmail) detailsText += `📧 Email: ${order.contactEmail}\n`;
+                if (order.contactPhone) detailsText += `📞 Контактный телефон: ${order.contactPhone}\n`;
+
+                if (order.statusHistory && order.statusHistory.length > 0) {
+                    detailsText += `\n📝 История статусов:\n`;
+                    order.statusHistory.forEach((hist, index) => {
+                        const histDate = new Date(hist.timestamp).toLocaleString('ru-RU', {
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit'
                         });
-                        ordersByMonth[monthKey].total += orderIncome;
-                        totalIncome += orderIncome;
+                        detailsText += `   ${index + 1}. ${hist.status} (${histDate})\n`;
+                    });
+                }
+
+                if (order.products && order.products.length > 0) {
+                    detailsText += `\n📦 Состав заказа:\n`;
+                    try {
+                        const productPromises = order.products.map(prod =>
+                            axios.get(`http://api:5000/api/products/${prod.productId}`)
+                                .then(res => ({
+                                    name: res.data.name,
+                                    quantity: prod.quantity,
+                                    price: prod.price
+                                }))
+                                .catch(err => ({
+                                    name: 'Неизвестный продукт',
+                                    quantity: prod.quantity,
+                                    price: prod.price
+                                }))
+                        );
+                        const productDetails = await Promise.all(productPromises);
+                        productDetails.forEach((p, index) => {
+                            detailsText += `\n   🔸 ${index + 1}. ${p.name}\n`;
+                            detailsText += `      📊 Количество: ${p.quantity} шт\n`;
+                            detailsText += `      💵 Цена за шт: ${p.price} ₽\n`;
+                            detailsText += `      💰 Итого: ${p.price * p.quantity} ₽\n`;
+                        });
+                    } catch (error) {
+                        console.error('Error fetching product details:', error);
                     }
                 }
-            }
 
-            console.log(`[Income] Общий доход: ${totalIncome}`);
-            console.log('[Income] Группировка по месяцам:', ordersByMonth);
-
-            if (totalIncome === 0) {
-                await sendMessageWithDelete(chatId, 'У вас пока нет доходов по заказам.');
-                return;
-            }
-
-            // Формируем сообщение по месяцам
-            for (const [month, data] of Object.entries(ordersByMonth).sort().reverse()) {
-                const [year, monthNum] = month.split('-');
-                const monthName = new Date(year, monthNum - 1).toLocaleString('ru-RU', { month: 'long' });
-
-                if (data.orders.length > 0) {
-                    incomeMessage += `\n📅 ${monthName} ${year}\n`;
-                    incomeMessage += `└─ 💰 Доход за месяц: ${data.total} ₽\n`;
-
-                    for (const order of data.orders) {
-                        incomeMessage += `\n🔹 Заказ №${order.id.slice(-4)} от ${order.date}\n`;
-                        incomeMessage += `📊 Статус: ${order.status}\n`;
-                        for (const product of order.products) {
-                            incomeMessage += `   • ${product.name} x${product.quantity} — ${product.price} ₽\n`;
-                        }
-                        incomeMessage += `   💵 Итого по заказу: ${order.total} ₽\n`;
-                    }
-                    incomeMessage += `\n${'─'.repeat(20)}\n`;
+                if (order.deliveryInfo && order.deliveryInfo.deliveryInstructions) {
+                    detailsText += `\n🚚 Инструкция по доставке:\n${order.deliveryInfo.deliveryInstructions}\n`;
                 }
-            }
 
-            incomeMessage += `\n💰 Общий доход: ${totalIncome} ₽`;
-
-            const keyboard = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
-                    ]
-                })
-            };
-
-            await sendMessageWithDelete(chatId, incomeMessage, keyboard);
-
-        } catch (error) {
-            console.error('Error fetching income:', error);
-            console.error('Error details:', error.response?.data);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении информации о доходах.');
-        }
-    }
-    else if (data === 'orders_list') {
-        await displayOrdersList(chatId);
-    }
-    else if (data === 'my_orders') {
-        await displayMyOrders(chatId);
-    }
-    else if (data.startsWith('cancel_order_')) {
-        const orderId = data.split('_')[2];
-        console.log(`[Отмена заказа] Получен запрос на отмену заказа: ${orderId}`);
-
-        try {
-            // Получаем информацию о заказе до отмены
-            const currentOrderResponse = await axios.get(`http://api:5000/api/orders/${orderId}`);
-            const currentOrder = currentOrderResponse.data.order || currentOrderResponse.data;
-            console.log(`[Отмена заказа] Текущее состояние заказа:`, currentOrder);
-
-            // Обновляем статус заказа на "Отменён"
-            const cancelResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, {
-                status: 'Отменён'
-            });
-            const updatedOrder = cancelResponse.data.order || cancelResponse.data;
-            console.log(`[Отмена заказа] Заказ успешно отменён:`, updatedOrder);
-
-            // Получаем информацию о продуктах
-            const productPromises = currentOrder.products.map(async prod => {
-                try {
-                    const productResponse = await axios.get(`http://api:5000/api/products/${prod.productId}`);
-                    return {
-                        ...prod,
-                        name: productResponse.data.name,
-                        chefId: productResponse.data.chefId
+                // Для "My orders" показываем только кнопки обновления статуса
+                // Для обычных заказов добавляем кнопку "Отменить заказ"
+                if (userState[chatId] && userState[chatId].orderListType === 'my_orders') {
+                    const statuses = [
+                        'Новый',
+                        'Принят в работу',
+                        'Готовится',
+                        'Готов к отправке',
+                        'В доставке',
+                        'Доставлен',
+                        'Завершён',
+                        'Отменён',
+                        'Возврат'
+                    ];
+                    const inlineStatusButtons = [];
+                    for (let i = 0; i < statuses.length; i += 3) {
+                        const row = statuses.slice(i, i + 3).map(status => {
+                            const shortStatus = statusMap[status] || status;
+                            const callbackData = `update_status::${order._id}::${shortStatus}`;
+                            console.log(`[Status Button] Generated callback_data: "${callbackData}", length: ${callbackData.length}, byte length: ${getByteLength(callbackData)}`);
+                            return { text: status, callback_data: callbackData };
+                        });
+                        inlineStatusButtons.push(row);
+                    }
+                    inlineStatusButtons.push([{ text: '⬅️ Назад', callback_data: 'my_orders' }]);
+                    const inlineKeyboard = { inline_keyboard: inlineStatusButtons };
+                    await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
+                } else {
+                    const inlineKeyboard = {
+                        inline_keyboard: [
+                            [{ text: '❌ Отменить заказ', callback_data: `cancel_order_${order._id}` }],
+                            [{ text: '⬅️ Назад', callback_data: 'orders_list' }]
+                        ]
                     };
-                } catch (err) {
-                    console.error(`[Отмена заказа] Ошибка получения информации о продукте ${prod.productId}:`, err.message);
-                    return prod;
-                }
-            });
-
-            const products = await Promise.all(productPromises);
-            console.log(`[Отмена заказа] Информация о продуктах:`, products);
-
-            // Формируем базовое уведомление
-            const timestamp = new Date().toLocaleString('ru-RU', {
-                timeZone: 'Europe/Moscow',
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
-
-            const baseNotification =
-                `❌ Заказ отменен\n\n` +
-                `📦 Заказ №${orderId.slice(-4)}\n` +
-                `🕒 Время отмены: ${timestamp}\n\n` +
-                `💰 Сумма заказа: ${updatedOrder.totalAmount} ₽\n` +
-                `📍 Адрес доставки: ${updatedOrder.shippingAddress}\n\n` +
-                `📋 Состав заказа:\n`;
-
-            // Добавляем информацию о продуктах
-            const productsInfo = products.map((prod, index) =>
-                `${index + 1}. ${prod.name || 'Товар'} x${prod.quantity} — ${prod.price} ₽`
-            ).join('\n');
-
-            // Отправляем уведомление клиенту
-            if (updatedOrder.clientId) {
-                const clientNotification =
-                    `${baseNotification}${productsInfo}\n\n` +
-                    `❗️ Заказ отменен\n` +
-                    `💬 Дополнительная информация: ${updatedOrder.description || 'Нет'}\n` +
-                    `📞 При возникновении вопросов свяжитесь с поваром: ${updatedOrder.chefPhone || 'Телефон не указан'}`;
-
-                try {
-                    await bot.sendMessage(updatedOrder.clientId, clientNotification);
-                    console.log(`[Отмена заказа] ✅ Уведомление отправлено клиенту ${updatedOrder.clientId}`);
-                } catch (error) {
-                    console.error(`[Отмена заказа] ❌ Ошибка отправки уведомления клиенту ${updatedOrder.clientId}:`, error.message);
+                    await sendMessageWithDelete(chatId, detailsText, { reply_markup: JSON.stringify(inlineKeyboard) });
                 }
             }
+            else if (data.startsWith('update_status::')) {
+                const parts = data.split("::");
+                const newStatus = parts[2];
+                botMetrics.ordersTotal.inc({ status: newStatus });
 
-            // Отправляем уведомление поварам
-            const uniqueChefIds = [...new Set(products.map(p => p.chefId))];
-            console.log(`[Отмена заказа] Найдены повара для уведомления:`, uniqueChefIds);
+                if (parts.length >= 3) {
+                    const orderId = parts[1];
+                    const newStatusCode = parts.slice(2).join("::");
+                    const userFriendlyStatus = Object.keys(statusMap)
+                        .find(key => statusMap[key] === newStatusCode) || newStatusCode;
 
-            for (const chefId of uniqueChefIds) {
-                if (chefId) {
-                    const chefNotification =
-                        `${baseNotification}${productsInfo}\n\n` +
-                        `❗️ Заказ отменен\n` +
-                        `💬 Дополнительная информация: ${updatedOrder.description || 'Нет'}\n` +
-                        `📱 Контакты клиента:\n` +
-                        `   Телефон: ${updatedOrder.contactPhone || 'Не указан'}\n` +
-                        `   Telegram: ${updatedOrder.telegramId ? '@' + updatedOrder.telegramId : 'Не указан'}`;
+                    console.log(`[Обновление статуса] Обработка изменения статуса заказа ${orderId}`);
+                    console.log(`[Обновление статуса] Новый статус: "${userFriendlyStatus}" (код: ${newStatusCode})`);
+                    console.log(`[Обновление статуса] Изменение инициировано пользователем: ${chatId}`);
 
                     try {
-                        await bot.sendMessage(chefId, chefNotification);
-                        console.log(`[Отмена заказа] ✅ Уведомление отправлено повару ${chefId}`);
+                        // Получаем текущий заказ до обновления
+                        const currentOrderResponse = await axios.get(`http://api:5000/api/orders/${orderId}`);
+                        const currentOrder = currentOrderResponse.data.order || currentOrderResponse.data;
+                        console.log(`[Обновление статуса] Текущее состояние заказа:`, currentOrder);
+
+                        // Получаем информацию об инициаторе изменений
+                        const initiator = {
+                            chatId: chatId.toString(),
+                            isChef: currentOrder.chefId === chatId.toString(),
+                            isClient: currentOrder.clientId === chatId.toString(),
+                        };
+                        console.log(`[Обновление статуса] Инициатор изменения:`, initiator);
+
+                        // Обновляем статус заказа
+                        const updateResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, {
+                            status: userFriendlyStatus
+                        });
+                        const updatedOrder = updateResponse.data.order || updateResponse.data;
+                        console.log(`[Обновление статуса] Заказ успешно обновлен:`, updatedOrder);
+
+                        // Получаем информацию о продуктах
+                        const productPromises = currentOrder.products.map(async prod => {
+                            try {
+                                const productResponse = await axios.get(`http://api:5000/api/products/${prod.productId}`);
+                                return {
+                                    ...prod,
+                                    name: productResponse.data.name,
+                                    chefId: productResponse.data.chefId
+                                };
+                            } catch (err) {
+                                console.error(`[Обновление статуса] Ошибка получения информации о продукте ${prod.productId}:`, err.message);
+                                return prod;
+                            }
+                        });
+
+                        const products = await Promise.all(productPromises);
+                        console.log(`[Обновление статуса] Информация о продуктах:`, products);
+
+                        // Формируем базовое уведомление
+                        const timestamp = new Date().toLocaleString('ru-RU', {
+                            timeZone: 'Europe/Moscow',
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        });
+
+                        const baseNotification =
+                            `🔄 Обновление статуса заказа\n\n` +
+                            `📦 Заказ №${orderId.slice(-4)}\n` +
+                            `📝 Новый статус: ${userFriendlyStatus}\n` +
+                            `🕒 Время изменения: ${timestamp}\n\n` +
+                            `💰 Сумма заказа: ${updatedOrder.totalAmount} ₽\n` +
+                            `📍 Адрес доставки: ${updatedOrder.shippingAddress}\n\n` +
+                            `📋 Состав заказа:\n`;
+
+                        // Добавляем информацию о продуктах
+                        const productsInfo = products.map((prod, index) =>
+                            `${index + 1}. ${prod.name || 'Товар'} x${prod.quantity} — ${prod.price} ₽`
+                        ).join('\n');
+
+                        // Определяем роль инициатора для уведомлений
+                        let initiatorRole = 'Пользователь';
+                        if (initiator.isChef) initiatorRole = 'Повар';
+                        else if (initiator.isClient) initiatorRole = 'Клиент';
+
+                        // Отправляем уведомление клиенту
+                        if (updatedOrder.clientId) {
+                            const clientNotification =
+                                `${baseNotification}${productsInfo}\n\n` +
+                                `${initiator.isClient ? '🔔 Вы изменили' : `👨‍🍳 ${initiatorRole} изменил`} статус вашего заказа\n` +
+                                `💬 Комментарий: ${updatedOrder.description || 'Нет'}\n` +
+                                `📞 Телефон повара: ${updatedOrder.chefPhone || 'Не указан'}`;
+
+                            try {
+                                await bot.sendMessage(updatedOrder.clientId, clientNotification);
+                                console.log(`[Обновление статуса] ✅ Уведомление отправлено клиенту ${updatedOrder.clientId}`);
+                            } catch (error) {
+                                console.error(`[Обновление статуса] ❌ Ошибка отправки уведомления клиенту ${updatedOrder.clientId}:`, error.message);
+                            }
+                        }
+
+                        // Отправляем уведомление поварам
+                        const uniqueChefIds = [...new Set(products.map(p => p.chefId))];
+                        console.log(`[Обновление статуса] Найдены повара для уведомления:`, uniqueChefIds);
+
+                        for (const chefId of uniqueChefIds) {
+                            if (chefId) {
+                                const chefNotification =
+                                    `${baseNotification}${productsInfo}\n\n` +
+                                    `${chefId === initiator.chatId ? '🔔 Вы изменили' : `👤 ${initiatorRole} изменил`} статус заказа\n` +
+                                    `💬 Дополнительная информация: ${updatedOrder.description || 'Нет'}\n` +
+                                    `📱 Контакты клиента:\n` +
+                                    `   Телефон: ${updatedOrder.contactPhone || 'Не указан'}\n` +
+                                    `   Telegram: ${updatedOrder.telegramId ? '@' + updatedOrder.telegramId : 'Не указан'}`;
+
+                                try {
+                                    await bot.sendMessage(chefId, chefNotification);
+                                    console.log(`[Обновление статуса] ✅ Уведомление отправлено повару ${chefId}`);
+                                } catch (error) {
+                                    console.error(`[Обновление статуса] ❌ Ошибка отправки уведомления повару ${chefId}:`, error.message);
+                                }
+                            }
+                        }
+
+                        // Подтверждение в чат, где было произведено изменение
+                        await sendMessageWithDelete(chatId, `Статус заказа №${orderId.slice(-4)} изменен на "${userFriendlyStatus}"`);
+
                     } catch (error) {
-                        console.error(`[Отмена заказа] ❌ Ошибка отправки уведомления повару ${chefId}:`, error.message);
+                        console.error(`[Обновление статуса] Ошибка:`, error.message);
+                        if (error.response?.data) {
+                            console.error(`[Обновление статуса] Ошибка API:`, error.response.data);
+                        }
+                        await sendMessageWithDelete(chatId, `Ошибка обновления статуса заказа №${orderId.slice(-4)}`);
                     }
                 }
             }
-
-            // Подтверждение для того, кто отменил заказ
-            await sendMessageWithDelete(chatId, `Заказ №${orderId.slice(-4)} успешно отменён! ❌`);
-
-        } catch (error) {
-            console.error(`[Отмена заказа] Ошибка:`, error.message);
-            if (error.response?.data) {
-                console.error(`[Отмена заказа] Ошибка API:`, error.response.data);
+            else if (data === 'welcome_menu') {
+                const welcomeMenu = {
+                    reply_markup: JSON.stringify({
+                        inline_keyboard: [
+                            [{ text: '➕ Новое', callback_data: 'add_welcome' }],
+                            [{ text: '📋 Все приветствия', callback_data: 'view_welcomes' }],
+                            [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                        ],
+                    }),
+                };
+                await sendMessageWithDelete(chatId, 'Управление приветствиями:', welcomeMenu);
             }
-            await sendMessageWithDelete(chatId, `Ошибка при отмене заказа ${orderId}. Попробуйте снова.`);
-        }
-    }
-    else if (data === 'view_products') {
-        try {
-            const response = await axios.get('http://api:5000/api/products');
-            const products = response.data;
-            if (products.length === 0) {
-                await sendMessageWithDelete(chatId, 'В данный момент продукты недоступны.');
-                return;
+            else if (data === 'add_welcome') {
+                userState[chatId] = { step: 'add_welcome_title' };
+                await sendMessageWithDelete(chatId, 'Введите заголовок приветствия:');
             }
-            const productButtons = products.map((product, index) => {
-                return [{ text: product.name, callback_data: `product_${index}` }];
-            });
-            productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
-            userState[chatId] = { step: 'select_product', products };
-            await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
-        } catch (error) {
-            console.error('Error fetching products:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка продуктов.');
-        }
-    }
-    else if (data.startsWith('view_expense_')) {
-        try {
-            const expenseId = data.split('view_expense_')[1];
-            const response = await axios.get(`http://api:5000/api/expenses/${expenseId}`);
-            const expense = response.data;
+            else if (data === 'view_welcomes') {
+                try {
+                    const response = await axios.get('http://api:5000/api/welcome');
+                    const welcomes = response.data;
 
-            let expenseDetails = `📋 Детали расхода:\n\n`;
-            expenseDetails += `🏷 Название: ${expense.title}\n`;
-            expenseDetails += `💰 Сумма: ${expense.amount} ₽\n`;
-            expenseDetails += `📁 Категория: ${expense.category}\n`;
-            expenseDetails += `📅 Дата: ${new Date(expense.date).toLocaleDateString()}\n`;
-            if (expense.description) {
-                expenseDetails += `📝 Описание: ${expense.description}\n`;
+                    if (welcomes.length === 0) {
+                        await sendMessageWithDelete(chatId, 'Приветствия пока не созданы.');
+                        return;
+                    }
+
+                    let messageText = '📋 Список приветствий:\n\n';
+
+                    welcomes.forEach((welcome, index) => {
+                        messageText += `${index + 1}. ${welcome.title || 'Без названия'}\n`;
+                        if (welcome.description) {
+                            messageText += `📝 ${welcome.description}\n`;
+                        }
+                        messageText += '\n';
+                    });
+
+                    const inlineKeyboard = welcomes.map(welcome => ([{
+                        text: welcome.title || 'Без названия',
+                        callback_data: `view_welcome_${welcome._id}`
+                    }]));
+
+                    inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'welcome_menu' }]);
+
+                    await sendMessageWithDelete(chatId, messageText, {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: inlineKeyboard
+                        })
+                    });
+                } catch (error) {
+                    console.error('Error fetching welcomes:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка приветствий.');
+                }
             }
+            else if (data.startsWith('toggle_welcome_status_')) {
+                try {
+                    const [, , welcomeId, newStatus] = data.split('_');
+                    const isActive = newStatus === 'true';
 
-            const keyboard = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [{ text: '🗑 Удалить расход', callback_data: `delete_expense_${expenseId}` }],
-                        [{ text: '⬅️ Назад к списку', callback_data: 'view_expenses' }]
-                    ]
-                })
-            };
+                    // Обновляем статус приветствия
+                    await axios.put(`http://api:5000/api/welcome/${welcomeId}`, {
+                        isActive: isActive
+                    });
 
-            await sendMessageWithDelete(chatId, expenseDetails, keyboard);
-        } catch (error) {
-            console.error('Error fetching expense details:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей расхода.');
-        }
-    }
-// Добавляем обработчик для удаления расхода
-    else if (data.startsWith('delete_expense_')) {
-        try {
-            const expenseId = data.split('delete_expense_')[1];
+                    await sendMessageWithDelete(chatId,
+                        `Статус приветствия успешно ${isActive ? 'активирован ✅' : 'деактивирован ❌'}!`
+                    );
 
-            // Запрашиваем подтверждение удаления
-            const confirmKeyboard = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [
-                            { text: '✅ Да, удалить', callback_data: `confirm_delete_expense_${expenseId}` },
-                            { text: '❌ Отмена', callback_data: `view_expense_${expenseId}` }
-                        ]
-                    ]
-                })
-            };
+                    // Перезагружаем детали приветствия через небольшую задержку
+                    setTimeout(() => {
+                        bot.emit('callback_query', {
+                            message: { chat: { id: chatId } },
+                            data: `view_welcome_${welcomeId}`
+                        });
+                    }, 1000);
 
-            await sendMessageWithDelete(chatId, 'Вы уверены, что хотите удалить этот расход?', confirmKeyboard);
-        } catch (error) {
-            console.error('Error preparing expense deletion:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при подготовке к удалению расхода.');
-        }
-    }
-// Добавляем обработчик для подтверждения удаления
-    else if (data.startsWith('confirm_delete_expense_')) {
-        try {
-            const expenseId = data.split('confirm_delete_expense_')[1];
-            await axios.delete(`http://api:5000/api/expenses/${expenseId}`);
+                } catch (error) {
+                    console.error('Error toggling welcome status:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при изменении статуса приветствия.');
+                }
+            }
+            else if (data.startsWith('view_welcome_')) {
+                try {
+                    const welcomeId = data.split('view_welcome_')[1];
+                    const response = await axios.get(`http://api:5000/api/welcome/${welcomeId}`);
+                    const welcome = response.data;
 
-            await sendMessageWithDelete(chatId, 'Расход успешно удален!');
+                    let messageText = `📝 Приветствие\n\n`;
+                    if (welcome.title) messageText += `📌 Заголовок: ${welcome.title}\n`;
+                    if (welcome.description) messageText += `📄 Описание: ${welcome.description}\n`;
+                    messageText += `📊 Статус: ${welcome.isActive ? 'Активно ✅' : 'Неактивно ❌'}\n`;
 
-            // Возвращаемся к списку расходов через небольшую задержку
-            setTimeout(async () => {
+                    const keyboard = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [{
+                                    text: welcome.isActive ? '❌ Деактивировать' : '✅ Активировать',
+                                    callback_data: `toggle_welcome_${welcomeId}_${!welcome.isActive}`
+                                }],
+                                [{ text: '🗑 Удалить', callback_data: `delete_welcome_${welcomeId}` }],
+                                [{ text: '⬅️ Назад', callback_data: 'view_welcomes' }]
+                            ]
+                        })
+                    };
+
+                    // Если есть видео, показываем видео
+                    if (welcome.video) {
+                        try {
+                            // Удаляем предыдущее сообщение
+                            if (lastBotMessages[chatId]) {
+                                try {
+                                    await bot.deleteMessage(chatId, lastBotMessages[chatId]);
+                                } catch (error) {
+                                    console.log('Error deleting previous message:', error);
+                                }
+                            }
+
+                            // Получаем видео
+                            const videoResponse = await axios.get(
+                                `http://api:5000/api/videos/${welcome.video}`,
+                                { responseType: 'arraybuffer' }
+                            );
+
+                            // Отправляем видео с подписью
+                            const message = await bot.sendVideo(chatId, Buffer.from(videoResponse.data), {
+                                caption: messageText,
+                                ...keyboard
+                            });
+
+                            if (message) {
+                                lastBotMessages[chatId] = message.message_id;
+                            }
+                        } catch (error) {
+                            console.error('Error loading welcome video:', error);
+                            await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке видео.');
+                        }
+                    }
+                    // Если нет видео, но есть фото
+                    else if (welcome.photo) {
+                        try {
+                            const photoResponse = await axios.get(
+                                `http://api:5000/api/images/file/${welcome.photo}`,
+                                { responseType: 'arraybuffer' }
+                            );
+
+                            // Отправляем фото с подписью
+                            await sendPhotoWithDelete(chatId, Buffer.from(photoResponse.data), {
+                                caption: messageText,
+                                ...keyboard
+                            });
+                        } catch (error) {
+                            console.error('Error loading welcome photo:', error);
+                            await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке фото.');
+                        }
+                    }
+                    // Если нет ни видео, ни фото
+                    else {
+                        await sendMessageWithDelete(chatId, messageText, keyboard);
+                    }
+                } catch (error) {
+                    console.error('Error fetching welcome details:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей приветствия.');
+                }
+            }
+            else if (data.startsWith('toggle_welcome_')) {
+                try {
+                    const [, , welcomeId, newStatus] = data.split('_');
+                    const isActive = newStatus === 'true';
+
+                    console.log(`[toggle_welcome] Toggling welcome status for ID: ${welcomeId}, new status: ${isActive}`);
+
+                    if (isActive) {
+                        // Сначала деактивируем все приветствия
+                        console.log('[toggle_welcome] Деактивация всех приветствий');
+                        await axios.put('http://api:5000/api/welcome/deactivate-all', {});
+
+                        // Затем активируем только выбранное приветствие
+                        console.log(`[toggle_welcome] Активация приветствия ${welcomeId}`);
+                        await axios.put(`http://api:5000/api/welcome/${welcomeId}`, {
+                            isActive: true
+                        });
+
+                        await sendMessageWithDelete(chatId,
+                            '✅ Приветствие успешно активировано! Все остальные приветствия деактивированы.'
+                        );
+                    } else {
+                        // Просто деактивируем текущее приветствие
+                        console.log(`[toggle_welcome] Деактивация приветствия ${welcomeId}`);
+                        await axios.put(`http://api:5000/api/welcome/${welcomeId}`, {
+                            isActive: false
+                        });
+
+                        await sendMessageWithDelete(chatId,
+                            '❌ Приветствие деактивировано!'
+                        );
+                    }
+
+                    // Перезагружаем список приветствий
+                    setTimeout(() => {
+                        bot.emit('callback_query', {
+                            message: { chat: { id: chatId } },
+                            data: 'view_welcomes'
+                        });
+                    }, 1000);
+
+                } catch (error) {
+                    console.error('Error toggling welcome status:', error);
+                    console.error('Error details:', error.response?.data);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при изменении статуса приветствия.');
+                }
+            }
+            else if (data.startsWith('delete_welcome_')) {
+                try {
+                    const welcomeId = data.split('delete_welcome_')[1];
+                    await axios.delete(`http://api:5000/api/welcome/${welcomeId}`);
+                    await sendMessageWithDelete(chatId, 'Приветствие успешно удалено!');
+                    setTimeout(() => {
+                        bot.emit('callback_query', {
+                            message: { chat: { id: chatId } },
+                            data: 'view_welcomes'
+                        });
+                    }, 1000);
+                } catch (error) {
+                    console.error('Error deleting welcome:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении приветствия.');
+                }
+            }
+            else if (data.startsWith('confirm_delete_welcome_')) {
+                try {
+                    const welcomeId = data.split('confirm_delete_welcome_')[1];
+                    await axios.delete(`http://api:5000/api/welcome/${welcomeId}`);
+                    await sendMessageWithDelete(chatId, 'Приветствие успешно удалено!');
+                    setTimeout(() => {
+                        bot.emit('callback_query', {
+                            message: { chat: { id: chatId } },
+                            data: 'view_welcomes'
+                        });
+                    }, 1000);
+                } catch (error) {
+                    console.error('Error deleting welcome:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении приветствия.');
+                }
+            }
+            else if (data === 'news_menu') {
+                const newsMenu = {
+                    reply_markup: JSON.stringify({
+                        inline_keyboard: [
+                            [{ text: '📰 Все новости', callback_data: 'view_news' }],
+                            [{ text: '➕ Добавить новость', callback_data: 'add_news' }],
+                            [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                        ],
+                    }),
+                };
+                await sendMessageWithDelete(chatId, 'Управление новостями:', newsMenu);
+            }
+            else if (data === 'view_news') {
+                try {
+                    const response = await axios.get('http://api:5000/api/news');
+                    const news = response.data;
+
+                    if (news.length === 0) {
+                        await sendMessageWithDelete(chatId, 'Пока нет новостей.');
+                        return;
+                    }
+
+                    let newsList = 'Список новостей:\n\n';
+                    newsList += 'Нажмите на новость для подробной информации:\n';
+
+                    const inlineKeyboard = news.map(item => ([{
+                        text: item.title,
+                        callback_data: `view_news_${item._id}`
+                    }]));
+
+                    inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'news_menu' }]);
+
+                    const keyboard = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: inlineKeyboard
+                        })
+                    };
+
+                    await sendMessageWithDelete(chatId, newsList, keyboard);
+                } catch (error) {
+                    console.error('Error fetching news:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка новостей.');
+                }
+            }
+            else if (data === 'add_news') {
+                userState[chatId] = { step: 'add_news_title' };
+                await sendMessageWithDelete(chatId, 'Введите заголовок новости:');
+            }
+            // Обработчик публикации новости и массовой рассылки
+            else if (data.startsWith('publish_news_')) {
+                try {
+                    const newsId = data.split('publish_news_')[1];
+
+                    // Получаем данные новости
+                    const newsResponse = await axios.get(`http://api:5000/api/news/${newsId}`);
+                    const news = newsResponse.data;
+
+                    // Получаем список всех пользователей
+                    const usersResponse = await axios.get('http://api:5000/api/users');
+                    const users = usersResponse.data;
+
+                    // Формируем текст рассылки
+                    const broadcastMessage = `📢 Новая новость!\n\n` +
+                        `📰 ${news.title}\n\n` +
+                        `${news.content}\n\n` +
+                        `📅 ${new Date().toLocaleDateString()}`;
+
+                    // Счетчики для статистики рассылки
+                    let successCount = 0;
+                    let failCount = 0;
+
+                    // Отправляем новость каждому пользователю
+                    for (const user of users) {
+                        if (user.telegramId) {
+                            try {
+                                await bot.sendMessage(user.telegramId, broadcastMessage);
+                                successCount++;
+                            } catch (error) {
+                                console.error(`Failed to send news to user ${user.telegramId}:`, error);
+                                failCount++;
+                            }
+                            // Небольшая задержка между отправками, чтобы не превысить лимиты Telegram
+                            await new Promise(resolve => setTimeout(resolve, 50));
+                        }
+                    }
+
+                    // Обновляем статус новости
+                    await axios.put(`http://api:5000/api/news/${newsId}`, {
+                        status: 'published'
+                    });
+
+                    // Отправляем отчет о рассылке
+                    const reportMessage = `✅ Новость успешно опубликована!\n\n` +
+                        `📊 Статистика рассылки:\n` +
+                        `✓ Успешно отправлено: ${successCount}\n` +
+                        `✗ Ошибок отправки: ${failCount}`;
+
+                    await sendMessageWithDelete(chatId, reportMessage);
+
+                    // Возвращаемся к просмотру новости через небольшую задержку
+                    setTimeout(() => {
+                        bot.emit('callback_query', {
+                            message: { chat: { id: chatId } },
+                            data: `view_news_${newsId}`
+                        });
+                    }, 2000);
+
+                } catch (error) {
+                    console.error('Error publishing news:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при публикации новости.');
+                }
+            }
+            else if (data.startsWith('view_news_')) {
+                try {
+                    const newsId = data.split('view_news_')[1];
+                    const response = await axios.get(`http://api:5000/api/news/${newsId}`);
+                    const news = response.data;
+
+                    let newsDetails = `📰 ${news.title}\n\n`;
+                    newsDetails += `${news.content}\n\n`;
+                    newsDetails += `📅 Дата: ${new Date(news.createdAt).toLocaleDateString()}\n`;
+                    newsDetails += `📊 Статус: ${news.status === 'active' ? 'Черновик' : 'Опубликовано'}\n`;
+
+                    const keyboard = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [
+                                    news.status === 'active' ?
+                                        { text: '📢 Опубликовать', callback_data: `publish_news_${newsId}` } :
+                                        { text: '✅ Опубликовано', callback_data: 'no_action' },
+                                    { text: '🗑 Удалить', callback_data: `delete_news_${newsId}` }
+                                ],
+                                [{ text: '⬅️ Назад к списку', callback_data: 'view_news' }]
+                            ]
+                        })
+                    };
+
+                    await sendMessageWithDelete(chatId, newsDetails, keyboard);
+                } catch (error) {
+                    console.error('Error fetching news details:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей новости.');
+                }
+            }
+            else if (data.startsWith('delete_news_')) {
+                try {
+                    const newsId = data.split('delete_news_')[1];
+                    const confirmKeyboard = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [
+                                    { text: '✅ Да, удалить', callback_data: `confirm_delete_news_${newsId}` },
+                                    { text: '❌ Отмена', callback_data: `view_news_${newsId}` }
+                                ]
+                            ]
+                        })
+                    };
+                    await sendMessageWithDelete(chatId, 'Вы уверены, что хотите удалить эту новость?', confirmKeyboard);
+                } catch (error) {
+                    console.error('Error preparing news deletion:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при подготовке к удалению новости.');
+                }
+            }
+            else if (data.startsWith('confirm_delete_news_')) {
+                try {
+                    const newsId = data.split('confirm_delete_news_')[1];
+                    await axios.delete(`http://api:5000/api/news/${newsId}`);
+                    await sendMessageWithDelete(chatId, 'Новость успешно удалена!');
+                    setTimeout(() => bot.emit('callback_query', { message: { chat: { id: chatId } }, data: 'view_news' }), 1000);
+                } catch (error) {
+                    console.error('Error deleting news:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении новости.');
+                }
+            }
+            else if (data === 'expenses_menu') {
+                const expensesMenu = {
+                    reply_markup: JSON.stringify({
+                        inline_keyboard: [
+                            [{ text: '📊 Все расходы', callback_data: 'view_expenses' }],
+                            [{ text: '➕ Добавить расход', callback_data: 'add_expense' }],
+                            [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                        ],
+                    }),
+                };
+                await sendMessageWithDelete(chatId, 'Управление расходами:', expensesMenu);
+            }
+            else if (data === 'view_expenses') {
                 try {
                     const response = await axios.get(`http://api:5000/api/expenses/chef/${chatId}`);
                     const expenses = response.data;
 
                     if (expenses.length === 0) {
-                        await sendMessageWithDelete(chatId, 'У вас больше нет расходов.');
+                        await sendMessageWithDelete(chatId, 'У вас пока нет расходов.');
                         return;
                     }
 
-                    // Повторно вызываем отображение списка расходов
+                    // Подсчитываем общую сумму расходов
                     const totalAmount = expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
+
                     let expensesList = 'Ваши расходы:\n\n';
                     expensesList += `💵 Общая сумма расходов: ${totalAmount} ₽\n\n`;
                     expensesList += 'Нажмите на расход для подробной информации:\n';
 
+                    // Создаем клавиатуру, где каждый расход - отдельная кнопка
                     const inlineKeyboard = expenses.map(expense => ([{
                         text: `${expense.title} - ${expense.amount} ₽`,
                         callback_data: `view_expense_${expense._id}`
                     }]));
+
+                    // Добавляем кнопку "Назад"
                     inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'expenses_menu' }]);
 
                     const keyboard = {
@@ -1435,146 +1181,532 @@ bot.on('callback_query', async (callbackQuery) => {
 
                     await sendMessageWithDelete(chatId, expensesList, keyboard);
                 } catch (error) {
-                    console.error('Error refreshing expenses list:', error);
-                    await sendMessageWithDelete(chatId, 'Произошла ошибка при обновлении списка расходов.');
-                }
-            }, 1000);
-        } catch (error) {
-            console.error('Error deleting expense:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении расхода.');
-        }
-    }
-    // В обработчике callback_query, найдите блок, где обрабатывается product_
-    else if (data.startsWith('product_')) {
-        const index = parseInt(data.split('_')[1], 10);
-        const selectedProduct = userState[chatId].products[index];
-
-        try {
-            // Формируем информацию о продукте
-            const productInfo = `Вы выбрали продукт: ${selectedProduct.name}\n` +
-                `Описание: ${selectedProduct.description}\n` +
-                `Цена: ${selectedProduct.price} ₽`;
-
-            // Создаем клавиатуру с кнопками действий
-            const productActionButtons = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [
-                            { text: '🛍 Купить', callback_data: 'buy_product' },
-                            { text: '⬅️ Назад', callback_data: 'back_to_products' }
-                        ]
-                    ]
-                })
-            };
-
-            // Удаляем предыдущее сообщение
-            if (lastBotMessages[chatId]) {
-                try {
-                    await bot.deleteMessage(chatId, lastBotMessages[chatId]);
-                } catch (error) {
-                    console.log('Error deleting previous message:', error.message);
+                    console.error('Error fetching expenses:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка расходов.');
                 }
             }
-
-            // Если у продукта есть видео
-            if (selectedProduct.video) {
+            else if (data === 'add_expense') {
+                userState[chatId] = { step: 'add_expense_title' };
+                await sendMessageWithDelete(chatId, 'Введите название расхода:');
+            }
+            else if (data === 'back_to_management') {
+                // Возврат к меню управления
+                const managementMenu = {
+                    reply_markup: JSON.stringify({
+                        inline_keyboard: [
+                            [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
+                            [
+                                { text: '💰 Расходы', callback_data: 'expenses_menu' },
+                                { text: '💵 Доходы', callback_data: 'income_menu' }
+                            ],
+                            [{ text: '📰 Новости', callback_data: 'news_menu' }],
+                            [{ text: '👋 Приветствие', callback_data: 'welcome_menu' }], // Добавляем новую кнопку
+                            [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
+                            [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
+                        ],
+                    }),
+                };
+                await sendMessageWithDelete(chatId, 'Панель управления:', managementMenu);
+            }
+            else if (data === 'income_menu') {
                 try {
-                    // Получаем видео
-                    const videoResponse = await axios.get(
-                        `http://api:5000/api/videos/${selectedProduct.video}`,
-                        { responseType: 'arraybuffer' }
-                    );
-                    const videoBuffer = Buffer.from(videoResponse.data);
+                    console.log(`[Income] Запрашиваем заказы для повара ${chatId}`);
+                    const response = await axios.get(`http://api:5000/api/orders/chef/${chatId}`);
+                    console.log('[Income] Получен ответ от API:', JSON.stringify(response.data, null, 2));
 
-                    // Отправляем видео с информацией о продукте
-                    const videoMessage = await bot.sendVideo(chatId, videoBuffer, {
-                        caption: productInfo,
-                        ...productActionButtons
-                    });
+                    const orders = response.data.orders || [];
+                    console.log(`[Income] Количество заказов: ${orders.length}`);
 
-                    // Сохраняем ID сообщения для последующего удаления
-                    if (videoMessage) {
-                        lastBotMessages[chatId] = videoMessage.message_id;
+                    if (!orders || orders.length === 0) {
+                        await sendMessageWithDelete(chatId, 'У вас пока нет заказов.');
+                        return;
                     }
-                } catch (videoError) {
-                    console.error('Error sending video:', videoError);
-                    await sendMessageWithDelete(chatId,
-                        `${productInfo}\n\n❌ Ошибка: Видео недоступно`,
-                        productActionButtons
-                    );
+
+                    let totalIncome = 0;
+                    let incomeMessage = '💵 Ваши доходы:\n\n';
+                    const ordersByMonth = {};
+
+                    for (const order of orders) {
+                        console.log(`[Income] Обработка заказа ${order._id}`);
+                        console.log(`[Income] Статус заказа: ${order.status}`);
+
+                        // Проверяем, что заказ принадлежит этому повару
+                        if (order.chefId === chatId.toString()) {
+                            const date = new Date(order.createdAt);
+                            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+
+                            if (!ordersByMonth[monthKey]) {
+                                ordersByMonth[monthKey] = {
+                                    orders: [],
+                                    total: 0
+                                };
+                            }
+
+                            // Получаем информацию о продуктах с их названиями
+                            const productsWithDetails = await Promise.all(order.products.map(async (product) => {
+                                try {
+                                    const productResponse = await axios.get(`http://api:5000/api/products/${product.productId}`);
+                                    return {
+                                        ...product,
+                                        name: productResponse.data.name // Добавляем название продукта
+                                    };
+                                } catch (err) {
+                                    console.error(`[Income] Ошибка получения информации о продукте ${product.productId}:`, err.message);
+                                    return {
+                                        ...product,
+                                        name: 'Неизвестный продукт'
+                                    };
+                                }
+                            }));
+
+                            const orderIncome = productsWithDetails.reduce((sum, product) => {
+                                const productTotal = product.price * product.quantity;
+                                console.log(`[Income] Доход с продукта ${product.name}: ${productTotal} (цена: ${product.price}, количество: ${product.quantity})`);
+                                return sum + productTotal;
+                            }, 0);
+
+                            console.log(`[Income] Доход с заказа: ${orderIncome}`);
+
+                            if (orderIncome > 0) {
+                                ordersByMonth[monthKey].orders.push({
+                                    id: order._id,
+                                    date: date.toLocaleDateString('ru-RU'),
+                                    products: productsWithDetails, // Теперь здесь есть названия продуктов
+                                    total: orderIncome,
+                                    status: order.status
+                                });
+                                ordersByMonth[monthKey].total += orderIncome;
+                                totalIncome += orderIncome;
+                            }
+                        }
+                    }
+
+                    console.log(`[Income] Общий доход: ${totalIncome}`);
+                    console.log('[Income] Группировка по месяцам:', ordersByMonth);
+
+                    if (totalIncome === 0) {
+                        await sendMessageWithDelete(chatId, 'У вас пока нет доходов по заказам.');
+                        return;
+                    }
+
+                    // Формируем сообщение по месяцам
+                    for (const [month, data] of Object.entries(ordersByMonth).sort().reverse()) {
+                        const [year, monthNum] = month.split('-');
+                        const monthName = new Date(year, monthNum - 1).toLocaleString('ru-RU', { month: 'long' });
+
+                        if (data.orders.length > 0) {
+                            incomeMessage += `\n📅 ${monthName} ${year}\n`;
+                            incomeMessage += `└─ 💰 Доход за месяц: ${data.total} ₽\n`;
+
+                            for (const order of data.orders) {
+                                incomeMessage += `\n🔹 Заказ №${order.id.slice(-4)} от ${order.date}\n`;
+                                incomeMessage += `📊 Статус: ${order.status}\n`;
+                                for (const product of order.products) {
+                                    incomeMessage += `   • ${product.name} x${product.quantity} — ${product.price} ₽\n`;
+                                }
+                                incomeMessage += `   💵 Итого по заказу: ${order.total} ₽\n`;
+                            }
+                            incomeMessage += `\n${'─'.repeat(20)}\n`;
+                        }
+                    }
+
+                    incomeMessage += `\n💰 Общий доход: ${totalIncome} ₽`;
+
+                    const keyboard = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                            ]
+                        })
+                    };
+
+                    await sendMessageWithDelete(chatId, incomeMessage, keyboard);
+
+                } catch (error) {
+                    console.error('Error fetching income:', error);
+                    console.error('Error details:', error.response?.data);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при получении информации о доходах.');
                 }
             }
-            // Если нет видео, но есть фото
-            else if (selectedProduct.filename || selectedProduct.image) {
+            else if (data === 'orders_list') {
+                await displayOrdersList(chatId);
+            }
+            else if (data === 'my_orders') {
+                await displayMyOrders(chatId);
+            }
+            else if (data.startsWith('cancel_order_')) {
+                const orderId = data.split('_')[2];
+                console.log(`[Отмена заказа] Получен запрос на отмену заказа: ${orderId}`);
+
                 try {
-                    const filename = selectedProduct.filename || selectedProduct.image;
-                    const imageResponse = await axios.get(
-                        `http://api:5000/api/images/file/${filename}`,
-                        { responseType: 'arraybuffer' }
-                    );
-                    const photoBuffer = Buffer.from(imageResponse.data);
+                    // Получаем информацию о заказе до отмены
+                    const currentOrderResponse = await axios.get(`http://api:5000/api/orders/${orderId}`);
+                    const currentOrder = currentOrderResponse.data.order || currentOrderResponse.data;
+                    console.log(`[Отмена заказа] Текущее состояние заказа:`, currentOrder);
 
-                    await sendPhotoWithDelete(chatId, photoBuffer, {
-                        caption: productInfo,
-                        ...productActionButtons
+                    // Обновляем статус заказа на "Отменён"
+                    const cancelResponse = await axios.put(`http://api:5000/api/orders/${orderId}`, {
+                        status: 'Отменён'
                     });
-                } catch (imageError) {
-                    console.error('Error sending photo:', imageError);
-                    await sendMessageWithDelete(chatId,
-                        `${productInfo}\n\n❌ Ошибка: Фото недоступно`,
-                        productActionButtons
-                    );
+                    const updatedOrder = cancelResponse.data.order || cancelResponse.data;
+                    console.log(`[Отмена заказа] Заказ успешно отменён:`, updatedOrder);
+
+                    // Получаем информацию о продуктах
+                    const productPromises = currentOrder.products.map(async prod => {
+                        try {
+                            const productResponse = await axios.get(`http://api:5000/api/products/${prod.productId}`);
+                            return {
+                                ...prod,
+                                name: productResponse.data.name,
+                                chefId: productResponse.data.chefId
+                            };
+                        } catch (err) {
+                            console.error(`[Отмена заказа] Ошибка получения информации о продукте ${prod.productId}:`, err.message);
+                            return prod;
+                        }
+                    });
+
+                    const products = await Promise.all(productPromises);
+                    console.log(`[Отмена заказа] Информация о продуктах:`, products);
+
+                    // Формируем базовое уведомление
+                    const timestamp = new Date().toLocaleString('ru-RU', {
+                        timeZone: 'Europe/Moscow',
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                    });
+
+                    const baseNotification =
+                        `❌ Заказ отменен\n\n` +
+                        `📦 Заказ №${orderId.slice(-4)}\n` +
+                        `🕒 Время отмены: ${timestamp}\n\n` +
+                        `💰 Сумма заказа: ${updatedOrder.totalAmount} ₽\n` +
+                        `📍 Адрес доставки: ${updatedOrder.shippingAddress}\n\n` +
+                        `📋 Состав заказа:\n`;
+
+                    // Добавляем информацию о продуктах
+                    const productsInfo = products.map((prod, index) =>
+                        `${index + 1}. ${prod.name || 'Товар'} x${prod.quantity} — ${prod.price} ₽`
+                    ).join('\n');
+
+                    // Отправляем уведомление клиенту
+                    if (updatedOrder.clientId) {
+                        const clientNotification =
+                            `${baseNotification}${productsInfo}\n\n` +
+                            `❗️ Заказ отменен\n` +
+                            `💬 Дополнительная информация: ${updatedOrder.description || 'Нет'}\n` +
+                            `📞 При возникновении вопросов свяжитесь с поваром: ${updatedOrder.chefPhone || 'Телефон не указан'}`;
+
+                        try {
+                            await bot.sendMessage(updatedOrder.clientId, clientNotification);
+                            console.log(`[Отмена заказа] ✅ Уведомление отправлено клиенту ${updatedOrder.clientId}`);
+                        } catch (error) {
+                            console.error(`[Отмена заказа] ❌ Ошибка отправки уведомления клиенту ${updatedOrder.clientId}:`, error.message);
+                        }
+                    }
+
+                    // Отправляем уведомление поварам
+                    const uniqueChefIds = [...new Set(products.map(p => p.chefId))];
+                    console.log(`[Отмена заказа] Найдены повара для уведомления:`, uniqueChefIds);
+
+                    for (const chefId of uniqueChefIds) {
+                        if (chefId) {
+                            const chefNotification =
+                                `${baseNotification}${productsInfo}\n\n` +
+                                `❗️ Заказ отменен\n` +
+                                `💬 Дополнительная информация: ${updatedOrder.description || 'Нет'}\n` +
+                                `📱 Контакты клиента:\n` +
+                                `   Телефон: ${updatedOrder.contactPhone || 'Не указан'}\n` +
+                                `   Telegram: ${updatedOrder.telegramId ? '@' + updatedOrder.telegramId : 'Не указан'}`;
+
+                            try {
+                                await bot.sendMessage(chefId, chefNotification);
+                                console.log(`[Отмена заказа] ✅ Уведомление отправлено повару ${chefId}`);
+                            } catch (error) {
+                                console.error(`[Отмена заказа] ❌ Ошибка отправки уведомления повару ${chefId}:`, error.message);
+                            }
+                        }
+                    }
+
+                    // Подтверждение для того, кто отменил заказ
+                    await sendMessageWithDelete(chatId, `Заказ №${orderId.slice(-4)} успешно отменён! ❌`);
+
+                } catch (error) {
+                    console.error(`[Отмена заказа] Ошибка:`, error.message);
+                    if (error.response?.data) {
+                        console.error(`[Отмена заказа] Ошибка API:`, error.response.data);
+                    }
+                    await sendMessageWithDelete(chatId, `Ошибка при отмене заказа ${orderId}. Попробуйте снова.`);
                 }
             }
-            // Если нет ни видео, ни фото
-            else {
-                await sendMessageWithDelete(chatId,
-                    `${productInfo}\n\n❌ Ошибка: Фото и/или видео отсутствует`,
-                    productActionButtons
-                );
+            else if (data === 'view_products') {
+                try {
+                    const response = await axios.get('http://api:5000/api/products');
+                    const products = response.data;
+                    if (products.length === 0) {
+                        await sendMessageWithDelete(chatId, 'В данный момент продукты недоступны.');
+                        return;
+                    }
+                    const productButtons = products.map((product, index) => {
+                        return [{ text: product.name, callback_data: `product_${index}` }];
+                    });
+                    productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
+                    userState[chatId] = { step: 'select_product', products };
+                    await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
+                } catch (error) {
+                    console.error('Error fetching products:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка продуктов.');
+                }
+            }
+            else if (data.startsWith('view_expense_')) {
+                try {
+                    const expenseId = data.split('view_expense_')[1];
+                    const response = await axios.get(`http://api:5000/api/expenses/${expenseId}`);
+                    const expense = response.data;
+
+                    let expenseDetails = `📋 Детали расхода:\n\n`;
+                    expenseDetails += `🏷 Название: ${expense.title}\n`;
+                    expenseDetails += `💰 Сумма: ${expense.amount} ₽\n`;
+                    expenseDetails += `📁 Категория: ${expense.category}\n`;
+                    expenseDetails += `📅 Дата: ${new Date(expense.date).toLocaleDateString()}\n`;
+                    if (expense.description) {
+                        expenseDetails += `📝 Описание: ${expense.description}\n`;
+                    }
+
+                    const keyboard = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [{ text: '🗑 Удалить расход', callback_data: `delete_expense_${expenseId}` }],
+                                [{ text: '⬅️ Назад к списку', callback_data: 'view_expenses' }]
+                            ]
+                        })
+                    };
+
+                    await sendMessageWithDelete(chatId, expenseDetails, keyboard);
+                } catch (error) {
+                    console.error('Error fetching expense details:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при получении деталей расхода.');
+                }
+            }
+// Добавляем обработчик для удаления расхода
+            else if (data.startsWith('delete_expense_')) {
+                try {
+                    const expenseId = data.split('delete_expense_')[1];
+
+                    // Запрашиваем подтверждение удаления
+                    const confirmKeyboard = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [
+                                    { text: '✅ Да, удалить', callback_data: `confirm_delete_expense_${expenseId}` },
+                                    { text: '❌ Отмена', callback_data: `view_expense_${expenseId}` }
+                                ]
+                            ]
+                        })
+                    };
+
+                    await sendMessageWithDelete(chatId, 'Вы уверены, что хотите удалить этот расход?', confirmKeyboard);
+                } catch (error) {
+                    console.error('Error preparing expense deletion:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при подготовке к удалению расхода.');
+                }
+            }
+// Добавляем обработчик для подтверждения удаления
+            else if (data.startsWith('confirm_delete_expense_')) {
+                try {
+                    const expenseId = data.split('confirm_delete_expense_')[1];
+                    await axios.delete(`http://api:5000/api/expenses/${expenseId}`);
+
+                    await sendMessageWithDelete(chatId, 'Расход успешно удален!');
+
+                    // Возвращаемся к списку расходов через небольшую задержку
+                    setTimeout(async () => {
+                        try {
+                            const response = await axios.get(`http://api:5000/api/expenses/chef/${chatId}`);
+                            const expenses = response.data;
+
+                            if (expenses.length === 0) {
+                                await sendMessageWithDelete(chatId, 'У вас больше нет расходов.');
+                                return;
+                            }
+
+                            // Повторно вызываем отображение списка расходов
+                            const totalAmount = expenses.reduce((sum, expense) => sum + (expense.amount || 0), 0);
+                            let expensesList = 'Ваши расходы:\n\n';
+                            expensesList += `💵 Общая сумма расходов: ${totalAmount} ₽\n\n`;
+                            expensesList += 'Нажмите на расход для подробной информации:\n';
+
+                            const inlineKeyboard = expenses.map(expense => ([{
+                                text: `${expense.title} - ${expense.amount} ₽`,
+                                callback_data: `view_expense_${expense._id}`
+                            }]));
+                            inlineKeyboard.push([{ text: '⬅️ Назад', callback_data: 'expenses_menu' }]);
+
+                            const keyboard = {
+                                reply_markup: JSON.stringify({
+                                    inline_keyboard: inlineKeyboard
+                                })
+                            };
+
+                            await sendMessageWithDelete(chatId, expensesList, keyboard);
+                        } catch (error) {
+                            console.error('Error refreshing expenses list:', error);
+                            await sendMessageWithDelete(chatId, 'Произошла ошибка при обновлении списка расходов.');
+                        }
+                    }, 1000);
+                } catch (error) {
+                    console.error('Error deleting expense:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при удалении расхода.');
+                }
+            }
+            // В обработчике callback_query, найдите блок, где обрабатывается product_
+            else if (data.startsWith('product_')) {
+                const index = parseInt(data.split('_')[1], 10);
+                const selectedProduct = userState[chatId].products[index];
+                const productId = data.split('_')[1];
+                botMetrics.productsViewed.inc({ product_id: productId });
+                try {
+                    // Формируем информацию о продукте
+                    const productInfo = `Вы выбрали продукт: ${selectedProduct.name}\n` +
+                        `Описание: ${selectedProduct.description}\n` +
+                        `Цена: ${selectedProduct.price} ₽`;
+
+                    // Создаем клавиатуру с кнопками действий
+                    const productActionButtons = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [
+                                    { text: '🛍 Купить', callback_data: 'buy_product' },
+                                    { text: '⬅️ Назад', callback_data: 'back_to_products' }
+                                ]
+                            ]
+                        })
+                    };
+
+                    // Удаляем предыдущее сообщение
+                    if (lastBotMessages[chatId]) {
+                        try {
+                            await bot.deleteMessage(chatId, lastBotMessages[chatId]);
+                        } catch (error) {
+                            console.log('Error deleting previous message:', error.message);
+                        }
+                    }
+
+                    // Если у продукта есть видео
+                    if (selectedProduct.video) {
+                        try {
+                            // Получаем видео
+                            const videoResponse = await axios.get(
+                                `http://api:5000/api/videos/${selectedProduct.video}`,
+                                { responseType: 'arraybuffer' }
+                            );
+                            const videoBuffer = Buffer.from(videoResponse.data);
+
+                            // Отправляем видео с информацией о продукте
+                            const videoMessage = await bot.sendVideo(chatId, videoBuffer, {
+                                caption: productInfo,
+                                ...productActionButtons
+                            });
+
+                            // Сохраняем ID сообщения для последующего удаления
+                            if (videoMessage) {
+                                lastBotMessages[chatId] = videoMessage.message_id;
+                            }
+                        } catch (videoError) {
+                            console.error('Error sending video:', videoError);
+                            await sendMessageWithDelete(chatId,
+                                `${productInfo}\n\n❌ Ошибка: Видео недоступно`,
+                                productActionButtons
+                            );
+                        }
+                    }
+                    // Если нет видео, но есть фото
+                    else if (selectedProduct.filename || selectedProduct.image) {
+                        try {
+                            const filename = selectedProduct.filename || selectedProduct.image;
+                            const imageResponse = await axios.get(
+                                `http://api:5000/api/images/file/${filename}`,
+                                { responseType: 'arraybuffer' }
+                            );
+                            const photoBuffer = Buffer.from(imageResponse.data);
+
+                            await sendPhotoWithDelete(chatId, photoBuffer, {
+                                caption: productInfo,
+                                ...productActionButtons
+                            });
+                        } catch (imageError) {
+                            console.error('Error sending photo:', imageError);
+                            await sendMessageWithDelete(chatId,
+                                `${productInfo}\n\n❌ Ошибка: Фото недоступно`,
+                                productActionButtons
+                            );
+                        }
+                    }
+                    // Если нет ни видео, ни фото
+                    else {
+                        await sendMessageWithDelete(chatId,
+                            `${productInfo}\n\n❌ Ошибка: Фото и/или видео отсутствует`,
+                            productActionButtons
+                        );
+                    }
+
+                    // Обновляем состояние
+                    userState[chatId] = {
+                        step: 'view_product',
+                        selectedProduct,
+                        products: userState[chatId].products
+                    };
+
+                } catch (error) {
+                    console.error('Error displaying product:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при отображении продукта.');
+                }
+            }
+            else if (data === 'back_to_products') {
+                const products = userState[chatId].products;
+                const productButtons = products.map((product, index) => {
+                    return [{ text: product.name, callback_data: `product_${index}` }];
+                });
+                productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
+                userState[chatId].step = 'select_product';
+                await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
+            }
+            else if (data === 'back_to_main') {
+                userState[chatId] = { step: 'main_menu' };
+                await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
+            }
+            else if (data === 'buy_product') {
+                console.log(`[buy_product] Starting purchase process for chat ${chatId}`);
+                console.log(`[buy_product] Current user state:`, userState[chatId]);
+
+                userState[chatId].step = 'enter_quantity';
+                console.log(`[buy_product] Updated user state:`, userState[chatId]);
+
+                await sendMessageWithDelete(chatId, 'Пожалуйста, введите желаемое количество:');
+            }
+            else if (data === 'add_product') {
+                userState[chatId] = { step: 'add_product_name' };
+                await sendMessageWithDelete(chatId, 'Введите название продукта: (пример: ➕ Новый продукт)');
+            }
+            else if (data === 'help') {
+                await sendMessageWithDelete(chatId, 'Вот что можно сделать:\n1. Просмотреть продукты\n2. Оформить заказ\n3. Добавить продукт');
             }
 
-            // Обновляем состояние
-            userState[chatId] = {
-                step: 'view_product',
-                selectedProduct,
-                products: userState[chatId].products
-            };
+
+
+
 
         } catch (error) {
-            console.error('Error displaying product:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при отображении продукта.');
+            botMetrics.errorCounter.inc({ type: 'callback_processing' });
+            console.error('Error processing callback:', error);
+            throw error;
         }
-    }
-    else if (data === 'back_to_products') {
-        const products = userState[chatId].products;
-        const productButtons = products.map((product, index) => {
-            return [{ text: product.name, callback_data: `product_${index}` }];
-        });
-        productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
-        userState[chatId].step = 'select_product';
-        await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
-    }
-    else if (data === 'back_to_main') {
-        userState[chatId] = { step: 'main_menu' };
-        await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
-    }
-    else if (data === 'buy_product') {
-        console.log(`[buy_product] Starting purchase process for chat ${chatId}`);
-        console.log(`[buy_product] Current user state:`, userState[chatId]);
+    }, { type: 'callback' });
 
-        userState[chatId].step = 'enter_quantity';
-        console.log(`[buy_product] Updated user state:`, userState[chatId]);
 
-        await sendMessageWithDelete(chatId, 'Пожалуйста, введите желаемое количество:');
-    }
-    else if (data === 'add_product') {
-        userState[chatId] = { step: 'add_product_name' };
-        await sendMessageWithDelete(chatId, 'Введите название продукта: (пример: ➕ Новый продукт)');
-    }
-    else if (data === 'help') {
-        await sendMessageWithDelete(chatId, 'Вот что можно сделать:\n1. Просмотреть продукты\n2. Оформить заказ\n3. Добавить продукт');
-    }
 });
 
 // Function to display all orders (non-filtered). Sets orderListType to "all"
@@ -1725,684 +1857,718 @@ async function displayMyOrders(chatId) {
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
-    const messageDebug = debugMessageObject(msg);
-    logDebug('Message Full Debug', 'Complete message object:', {
-        originalMessage: msg,
-        debugInfo: messageDebug
-    });
 
-    // Расширенное логирование для отладки
-    logDebug('Message Handler', 'Received message details:', {
-        chatId,
-        hasText: !!text,
-        hasPhoto: !!msg.photo,
-        hasVideo: !!msg.video,
-        messageType: msg.video ? 'video' : (msg.photo ? 'photo' : (text ? 'text' : 'other')),
-        videoDetails: msg.video,
-        userState: userState[chatId]
-    });
-    if (text === '🍞 Каталог') {
-        try {
-            const response = await axios.get('http://api:5000/api/products');
-            const products = response.data;
-            if (products.length === 0) {
-                await sendMessageWithDelete(chatId, 'В данный момент продукты недоступны.');
-                return;
-            }
-            const productButtons = products.map((product, index) => {
-                return [{ text: product.name, callback_data: `product_${index}` }];
-            });
-            productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
-            userState[chatId] = { step: 'select_product', products, telegramId: msg.from.username };
-            await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
-        } catch (error) {
-            console.error('Error fetching products:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка продуктов.');
-        }
-        return;
-    }
-    if (text === '📋 Заказы') {
-        await displayOrdersList(chatId);
-        return;
-    }
-    if (text === '❓ Помощь') {
-        await sendMessageWithDelete(chatId,
-            'Вот что можно сделать:\n\n' +
-            '1. 🍞 Каталог - просмотр всех доступных продуктов\n' +
-            '2. 📋 Заказы - просмотр ваших заказов (подробная информация и отмена заказа)\n' +
-            '3. ❓ Помощь - показать это сообщение\n\n' +
-            'Для совершения покупки:\n' +
-            '1. Откройте каталог\n' +
-            '2. Выберите интересующий товар\n' +
-            '3. Нажмите кнопку "Купить"\n' +
-            '4. Следуйте инструкциям бота'
-        );
-        return;
-    }
-    if (text === '⚙️ Управление') {
-        try {
-            const userRole = await getUserRole(chatId);
-            if (userRole !== 'chef') {
-                console.log(`[Управление] Отказано в доступе пользователю ${chatId}: недостаточно прав`);
-                await sendMessageWithDelete(chatId, 'У вас нет доступа к этому разделу.');
-                return;
-            }
-
-            const managementMenu = {
-                reply_markup: JSON.stringify({
-                    inline_keyboard: [
-                        [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
-                        [
-                            { text: '💰 Расходы', callback_data: 'expenses_menu' },
-                            { text: '💵 Доходы', callback_data: 'income_menu' }
-                        ],
-                        [{ text: '📰 Новости', callback_data: 'news_menu' }],
-                        [{ text: '👋 Приветствие', callback_data: 'welcome_menu' }], // Добавляем новую кнопку
-                        [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
-                        [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
-                    ],
-                }),
-            };
-            await sendMessageWithDelete(chatId, 'Панель управления:', managementMenu);
-        } catch (error) {
-            console.error('[Управление] Ошибка:', error.message);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при доступе к панели управления.');
-        }
-        return;
-    }
+    // Обновляем время последней активности пользователя
     if (!userState[chatId]) {
-        return;
+        userState[chatId] = {};
     }
-    if (userState[chatId].step === 'add_product_name') {
-        userState[chatId].productName = text;
-        userState[chatId].step = 'add_product_description';
-        await sendMessageWithDelete(chatId, 'Введите описание продукта:');
-    } else if (userState[chatId].step === 'add_product_description') {
-        userState[chatId].productDescription = text;
-        userState[chatId].step = 'add_product_price';
-        await sendMessageWithDelete(chatId, 'Введите цену продукта:');
-    } else if (userState[chatId].step === 'add_product_price') {
-        const price = parseFloat(text);
-        if (isNaN(price) || price <= 0) {
-            await sendMessageWithDelete(chatId, 'Введите корректную цену продукта.');
-        } else {
-            userState[chatId].productPrice = price;
-            userState[chatId].step = 'add_product_category';
-            await sendMessageWithDelete(chatId, 'Введите категорию продукта:');
-        }
-    } else if (userState[chatId].step === 'add_product_category') {
-        userState[chatId].productCategory = text;
-        userState[chatId].step = 'add_product_media';
-        await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте изображение продукта. После этого вы сможете добавить видео (или пропустить этот шаг):');
-    }
-    else if (userState[chatId]?.step === 'add_welcome_title') {
-        userState[chatId].welcomeTitle = text === '-' ? '' : text;
-        userState[chatId].step = 'add_welcome_description';
-        await sendMessageWithDelete(chatId, 'Введите описание приветствия (или отправьте "-" для пропуска):');
-    }
-    else if (userState[chatId]?.step === 'add_welcome_description') {
-        userState[chatId].welcomeDescription = text === '-' ? '' : text;
-        userState[chatId].step = 'add_welcome_media';
-        await sendMessageWithDelete(chatId, 'Отправьте фото для приветствия (или отправьте "пропустить" для пропуска):');
-    }
-    else if (userState[chatId]?.step === 'add_welcome_media') {
-        if (text?.toLowerCase() === 'пропустить') {
-            // Переходим к добавлению видео
-            userState[chatId].step = 'add_welcome_video';
-            await sendMessageWithDelete(chatId, 'Отправьте видео для приветствия (или напишите "пропустить"):');
-            return;
-        }
+    userState[chatId].lastActivity = Date.now();
 
-        if (msg.photo) {
-            try {
-                const photo = msg.photo[msg.photo.length - 1];
-                const file = await bot.getFile(photo.file_id);
-                const fileLink = file.fileLink || await bot.getFileLink(photo.file_id);
-
-                const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
-                const buffer = Buffer.from(response.data);
-                const timestamp = Date.now();
-                const filename = `${timestamp}.jpg`;
-
-                const form = new FormData();
-                form.append('image', buffer, {
-                    filename: filename,
-                    contentType: 'image/jpeg'
+    await trackExecutionTime(async () => {
+        try {
+            // Отслеживаем команды
+            if (text && text.startsWith('/')) {
+                botMetrics.commandsCounter.inc({
+                    command: text.split(' ')[0],
+                    user_id: chatId.toString()
                 });
-
-                const imageResponse = await axios.post('http://api:5000/api/images/upload', form, {
-                    headers: form.getHeaders()
-                });
-
-                userState[chatId].welcomePhoto = imageResponse.data.image.filename;
-                userState[chatId].step = 'add_welcome_video';
-
-                await sendMessageWithDelete(chatId, 'Фото добавлено! Теперь отправьте видео (или напишите "пропустить"):');
-            } catch (error) {
-                console.error('Error uploading welcome photo:', error);
-                await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке фото. Попробуйте еще раз или напишите "пропустить".');
             }
-        } else {
-            await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте фото или напишите "пропустить".');
-        }
-    }
-    else if (userState[chatId]?.step === 'add_welcome_video') {
-        if (text?.toLowerCase() === 'пропустить' || msg.video || (msg.document && msg.document.mime_type?.startsWith('video/'))) {
-            try {
-                let welcomeData = {
-                    title: userState[chatId].welcomeTitle,
-                    description: userState[chatId].welcomeDescription,
-                    photo: userState[chatId].welcomePhoto
-                };
 
-                // Если есть видео, обрабатываем его
-                if (msg.video || (msg.document && msg.document.mime_type?.startsWith('video/'))) {
-                    const fileId = msg.video?.file_id || msg.document?.file_id;
-                    const file = await bot.getFile(fileId);
-                    const fileLink = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+            const messageDebug = debugMessageObject(msg);
+            logDebug('Message Full Debug', 'Complete message object:', {
+                originalMessage: msg,
+                debugInfo: messageDebug
+            });
 
-                    const videoResponse = await axios({
-                        method: 'get',
-                        url: fileLink,
-                        responseType: 'arraybuffer',
-                        maxContentLength: 50 * 1024 * 1024
+            // Расширенное логирование для отладки
+            logDebug('Message Handler', 'Received message details:', {
+                chatId,
+                hasText: !!text,
+                hasPhoto: !!msg.photo,
+                hasVideo: !!msg.video,
+                messageType: msg.video ? 'video' : (msg.photo ? 'photo' : (text ? 'text' : 'other')),
+                videoDetails: msg.video,
+                userState: userState[chatId]
+            });
+            if (text === '🍞 Каталог') {
+                botMetrics.commandsCounter.inc({
+                    command: 'catalog',
+                    user_id: chatId.toString()
+                });
+                try {
+                    const response = await axios.get('http://api:5000/api/products');
+                    const products = response.data;
+                    if (products.length === 0) {
+                        await sendMessageWithDelete(chatId, 'В данный момент продукты недоступны.');
+                        return;
+                    }
+                    const productButtons = products.map((product, index) => {
+                        return [{ text: product.name, callback_data: `product_${index}` }];
                     });
+                    productButtons.push([{ text: '⬅️ Назад', callback_data: 'back_to_main' }]);
+                    userState[chatId] = { step: 'select_product', products, telegramId: msg.from.username };
+                    await sendMessageWithDelete(chatId, 'Вот список доступных продуктов:', { reply_markup: JSON.stringify({ inline_keyboard: productButtons }) });
+                } catch (error) {
+                    console.error('Error fetching products:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при получении списка продуктов.');
+                }
+                return;
+            }
+            if (text === '📋 Заказы') {
+                await displayOrdersList(chatId);
+                return;
+            }
+            if (text === '❓ Помощь') {
+                await sendMessageWithDelete(chatId,
+                    'Вот что можно сделать:\n\n' +
+                    '1. 🍞 Каталог - просмотр всех доступных продуктов\n' +
+                    '2. 📋 Заказы - просмотр ваших заказов (подробная информация и отмена заказа)\n' +
+                    '3. ❓ Помощь - показать это сообщение\n\n' +
+                    'Для совершения покупки:\n' +
+                    '1. Откройте каталог\n' +
+                    '2. Выберите интересующий товар\n' +
+                    '3. Нажмите кнопку "Купить"\n' +
+                    '4. Следуйте инструкциям бота'
+                );
+                return;
+            }
+            if (text === '⚙️ Управление') {
+                try {
+                    const userRole = await getUserRole(chatId);
+                    if (userRole !== 'chef') {
+                        console.log(`[Управление] Отказано в доступе пользователю ${chatId}: недостаточно прав`);
+                        await sendMessageWithDelete(chatId, 'У вас нет доступа к этому разделу.');
+                        return;
+                    }
+
+                    const managementMenu = {
+                        reply_markup: JSON.stringify({
+                            inline_keyboard: [
+                                [{ text: '➕ Добавить продукт', callback_data: 'add_product' }],
+                                [
+                                    { text: '💰 Расходы', callback_data: 'expenses_menu' },
+                                    { text: '💵 Доходы', callback_data: 'income_menu' }
+                                ],
+                                [{ text: '📰 Новости', callback_data: 'news_menu' }],
+                                [{ text: '👋 Приветствие', callback_data: 'welcome_menu' }], // Добавляем новую кнопку
+                                [{ text: '👨‍🍳 Мои заказы', callback_data: 'my_orders' }],
+                                [{ text: '⬅️ Назад', callback_data: 'back_to_main' }]
+                            ],
+                        }),
+                    };
+                    await sendMessageWithDelete(chatId, 'Панель управления:', managementMenu);
+                } catch (error) {
+                    console.error('[Управление] Ошибка:', error.message);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при доступе к панели управления.');
+                }
+                return;
+            }
+            if (!userState[chatId]) {
+                return;
+            }
+            if (userState[chatId].step === 'add_product_name') {
+                userState[chatId].productName = text;
+                userState[chatId].step = 'add_product_description';
+                await sendMessageWithDelete(chatId, 'Введите описание продукта:');
+            } else if (userState[chatId].step === 'add_product_description') {
+                userState[chatId].productDescription = text;
+                userState[chatId].step = 'add_product_price';
+                await sendMessageWithDelete(chatId, 'Введите цену продукта:');
+            } else if (userState[chatId].step === 'add_product_price') {
+                const price = parseFloat(text);
+                if (isNaN(price) || price <= 0) {
+                    await sendMessageWithDelete(chatId, 'Введите корректную цену продукта.');
+                } else {
+                    userState[chatId].productPrice = price;
+                    userState[chatId].step = 'add_product_category';
+                    await sendMessageWithDelete(chatId, 'Введите категорию продукта:');
+                }
+            } else if (userState[chatId].step === 'add_product_category') {
+                userState[chatId].productCategory = text;
+                userState[chatId].step = 'add_product_media';
+                await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте изображение продукта. После этого вы сможете добавить видео (или пропустить этот шаг):');
+            }
+            else if (userState[chatId]?.step === 'add_welcome_title') {
+                userState[chatId].welcomeTitle = text === '-' ? '' : text;
+                userState[chatId].step = 'add_welcome_description';
+                await sendMessageWithDelete(chatId, 'Введите описание приветствия (или отправьте "-" для пропуска):');
+            }
+            else if (userState[chatId]?.step === 'add_welcome_description') {
+                userState[chatId].welcomeDescription = text === '-' ? '' : text;
+                userState[chatId].step = 'add_welcome_media';
+                await sendMessageWithDelete(chatId, 'Отправьте фото для приветствия (или отправьте "пропустить" для пропуска):');
+            }
+            else if (userState[chatId]?.step === 'add_welcome_media') {
+                if (text?.toLowerCase() === 'пропустить') {
+                    // Переходим к добавлению видео
+                    userState[chatId].step = 'add_welcome_video';
+                    await sendMessageWithDelete(chatId, 'Отправьте видео для приветствия (или напишите "пропустить"):');
+                    return;
+                }
+
+                if (msg.photo) {
+                    try {
+                        const photo = msg.photo[msg.photo.length - 1];
+                        const file = await bot.getFile(photo.file_id);
+                        const fileLink = file.fileLink || await bot.getFileLink(photo.file_id);
+
+                        const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+                        const buffer = Buffer.from(response.data);
+                        const timestamp = Date.now();
+                        const filename = `${timestamp}.jpg`;
+
+                        const form = new FormData();
+                        form.append('image', buffer, {
+                            filename: filename,
+                            contentType: 'image/jpeg'
+                        });
+
+                        const imageResponse = await axios.post('http://api:5000/api/images/upload', form, {
+                            headers: form.getHeaders()
+                        });
+
+                        userState[chatId].welcomePhoto = imageResponse.data.image.filename;
+                        userState[chatId].step = 'add_welcome_video';
+
+                        await sendMessageWithDelete(chatId, 'Фото добавлено! Теперь отправьте видео (или напишите "пропустить"):');
+                    } catch (error) {
+                        console.error('Error uploading welcome photo:', error);
+                        await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке фото. Попробуйте еще раз или напишите "пропустить".');
+                    }
+                } else {
+                    await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте фото или напишите "пропустить".');
+                }
+            }
+            else if (userState[chatId]?.step === 'add_welcome_video') {
+                if (text?.toLowerCase() === 'пропустить' || msg.video || (msg.document && msg.document.mime_type?.startsWith('video/'))) {
+                    try {
+                        let welcomeData = {
+                            title: userState[chatId].welcomeTitle,
+                            description: userState[chatId].welcomeDescription,
+                            photo: userState[chatId].welcomePhoto
+                        };
+
+                        // Если есть видео, обрабатываем его
+                        if (msg.video || (msg.document && msg.document.mime_type?.startsWith('video/'))) {
+                            const fileId = msg.video?.file_id || msg.document?.file_id;
+                            const file = await bot.getFile(fileId);
+                            const fileLink = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+
+                            const videoResponse = await axios({
+                                method: 'get',
+                                url: fileLink,
+                                responseType: 'arraybuffer',
+                                maxContentLength: 50 * 1024 * 1024
+                            });
+
+                            const form = new FormData();
+                            const videoBuffer = Buffer.from(videoResponse.data);
+
+                            form.append('video', videoBuffer, {
+                                filename: `video_${Date.now()}.mp4`,
+                                contentType: msg.video?.mime_type || msg.document?.mime_type || 'video/mp4'
+                            });
+
+                            const uploadResponse = await axios.post(
+                                'http://api:5000/api/videos/upload',
+                                form,
+                                {
+                                    headers: {
+                                        ...form.getHeaders(),
+                                        'Content-Length': form.getLengthSync()
+                                    },
+                                    maxContentLength: 50 * 1024 * 1024,
+                                    maxBodyLength: 50 * 1024 * 1024
+                                }
+                            );
+
+                            welcomeData.video = uploadResponse.data.video.filename;
+                        }
+
+                        // Сохраняем данные меню до удаления состояния
+                        const welcomeMenu = {
+                            reply_markup: JSON.stringify({
+                                inline_keyboard: [
+                                    [{ text: '➕ Новое', callback_data: 'add_welcome' }],
+                                    [{ text: '📋 Все приветствия', callback_data: 'view_welcomes' }],
+                                    [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                                ],
+                            }),
+                        };
+
+                        // Сохраняем сообщение об успехе в зависимости от наличия видео
+                        const successMessage = welcomeData.video
+                            ? '✅ Приветствие успешно создано с фото и видео!'
+                            : '✅ Приветствие успешно создано с фото!';
+
+                        // Создаем приветствие
+                        await axios.post('http://api:5000/api/welcome', welcomeData);
+
+                        // Очищаем состояние до отправки сообщений
+                        delete userState[chatId];
+
+                        // Отправляем сообщение об успехе
+                        await sendMessageWithDelete(chatId, successMessage);
+
+                        // Показываем меню через задержку
+                        setTimeout(async () => {
+                            await sendMessageWithDelete(chatId, 'Управление приветствиями:', welcomeMenu);
+                        }, 1000);
+
+                    } catch (error) {
+                        console.error('Error creating welcome:', error);
+                        const errorMessage = msg.video
+                            ? 'Произошла ошибка при загрузке видео. Попробуйте еще раз или напишите "пропустить".'
+                            : 'Произошла ошибка при создании приветствия.';
+                        await sendMessageWithDelete(chatId, errorMessage);
+                    }
+                } else {
+                    await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте видео или напишите "пропустить".');
+                }
+            }
+            // Обработка загрузки изображения
+            // Обработка фото
+            if (userState[chatId]?.step === 'add_product_media' && msg.photo) {
+                try {
+                    const photo = msg.photo[msg.photo.length - 1];
+                    const file = await bot.getFile(photo.file_id);
+                    const fileLink = file.fileLink || await bot.getFileLink(photo.file_id);
+
+                    const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+                    const buffer = Buffer.from(response.data);
+                    const timestamp = Date.now();
+                    const filename = `${timestamp}.jpg`;
 
                     const form = new FormData();
-                    const videoBuffer = Buffer.from(videoResponse.data);
-
-                    form.append('video', videoBuffer, {
-                        filename: `video_${Date.now()}.mp4`,
-                        contentType: msg.video?.mime_type || msg.document?.mime_type || 'video/mp4'
+                    form.append('image', buffer, {
+                        filename: filename,
+                        contentType: 'image/jpeg'
                     });
 
-                    const uploadResponse = await axios.post(
-                        'http://api:5000/api/videos/upload',
-                        form,
-                        {
-                            headers: {
-                                ...form.getHeaders(),
-                                'Content-Length': form.getLengthSync()
-                            },
-                            maxContentLength: 50 * 1024 * 1024,
-                            maxBodyLength: 50 * 1024 * 1024
-                        }
+                    const imageResponse = await axios.post('http://api:5000/api/images/upload', form, {
+                        headers: form.getHeaders()
+                    });
+
+                    userState[chatId].productImage = imageResponse.data.image.filename;
+                    userState[chatId].step = 'waiting_for_video';
+
+                    await sendMessageWithDelete(chatId,
+                        'Изображение загружено! Теперь отправьте видео продукта (или напишите "пропустить" для пропуска этого шага):'
                     );
-
-                    welcomeData.video = uploadResponse.data.video.filename;
+                    return;
+                } catch (error) {
+                    logDebug('Image Upload', 'Error uploading image', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке изображения. Попробуйте снова.');
+                    return;
                 }
-
-                // Сохраняем данные меню до удаления состояния
-                const welcomeMenu = {
-                    reply_markup: JSON.stringify({
-                        inline_keyboard: [
-                            [{ text: '➕ Новое', callback_data: 'add_welcome' }],
-                            [{ text: '📋 Все приветствия', callback_data: 'view_welcomes' }],
-                            [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
-                        ],
-                    }),
-                };
-
-                // Сохраняем сообщение об успехе в зависимости от наличия видео
-                const successMessage = welcomeData.video
-                    ? '✅ Приветствие успешно создано с фото и видео!'
-                    : '✅ Приветствие успешно создано с фото!';
-
-                // Создаем приветствие
-                await axios.post('http://api:5000/api/welcome', welcomeData);
-
-                // Очищаем состояние до отправки сообщений
-                delete userState[chatId];
-
-                // Отправляем сообщение об успехе
-                await sendMessageWithDelete(chatId, successMessage);
-
-                // Показываем меню через задержку
-                setTimeout(async () => {
-                    await sendMessageWithDelete(chatId, 'Управление приветствиями:', welcomeMenu);
-                }, 1000);
-
-            } catch (error) {
-                console.error('Error creating welcome:', error);
-                const errorMessage = msg.video
-                    ? 'Произошла ошибка при загрузке видео. Попробуйте еще раз или напишите "пропустить".'
-                    : 'Произошла ошибка при создании приветствия.';
-                await sendMessageWithDelete(chatId, errorMessage);
             }
-        } else {
-            await sendMessageWithDelete(chatId, 'Пожалуйста, отправьте видео или напишите "пропустить".');
-        }
-    }
-    // Обработка загрузки изображения
-    // Обработка фото
-    if (userState[chatId]?.step === 'add_product_media' && msg.photo) {
-        try {
-            const photo = msg.photo[msg.photo.length - 1];
-            const file = await bot.getFile(photo.file_id);
-            const fileLink = file.fileLink || await bot.getFileLink(photo.file_id);
-
-            const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
-            const buffer = Buffer.from(response.data);
-            const timestamp = Date.now();
-            const filename = `${timestamp}.jpg`;
-
-            const form = new FormData();
-            form.append('image', buffer, {
-                filename: filename,
-                contentType: 'image/jpeg'
-            });
-
-            const imageResponse = await axios.post('http://api:5000/api/images/upload', form, {
-                headers: form.getHeaders()
-            });
-
-            userState[chatId].productImage = imageResponse.data.image.filename;
-            userState[chatId].step = 'waiting_for_video';
-
-            await sendMessageWithDelete(chatId,
-                'Изображение загружено! Теперь отправьте видео продукта (или напишите "пропустить" для пропуска этого шага):'
-            );
-            return;
-        } catch (error) {
-            logDebug('Image Upload', 'Error uploading image', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при загрузке изображения. Попробуйте снова.');
-            return;
-        }
-    }
-    // Обработка загрузки видео или пропуска
-    if (userState[chatId]?.step === 'waiting_for_video') {
-        logDebug('Video Handler', 'Processing video step', {
-            messageTypes: messageDebug.contentTypes,
-            state: userState[chatId],
-            hasVideo: !!msg.video,
-            hasDocument: !!msg.document
-        });
-
-        // Проверяем, является ли документ видео файлом
-        const isVideoDocument = msg.document &&
-            msg.document.mime_type &&
-            msg.document.mime_type.startsWith('video/');
-
-        if (text?.toLowerCase() === 'пропустить' || text?.toLowerCase() === '-') {
-            try {
-                // Создаем продукт без видео
-                const newProduct = {
-                    name: userState[chatId].productName,
-                    description: userState[chatId].productDescription,
-                    price: userState[chatId].productPrice,
-                    category: userState[chatId].productCategory,
-                    image: userState[chatId].productImage,
-                    chefId: chatId.toString()
-                };
-
-                logDebug('Product Creation', 'Creating product without video', newProduct);
-                const productResponse = await axios.post('http://api:5000/api/products', newProduct);
-                logDebug('Product Creation', 'Product created successfully', productResponse.data);
-
-                await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен! 📸`);
-                setTimeout(async () => {
-                    await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
-                }, 2000);
-                delete userState[chatId];
-                return;
-            } catch (error) {
-                logDebug('Product Creation', 'Error creating product', error);
-                await sendMessageWithDelete(chatId, 'Произошла ошибка при создании продукта. Попробуйте снова.');
-                return;
-            }
-        } else if (msg.video || (msg.document && msg.document.mime_type?.startsWith('video/'))) {
-            try {
-                logDebug('Video Handler', 'Starting video processing', {
-                    video: msg.video,
-                    document: msg.document
+            // Обработка загрузки видео или пропуска
+            if (userState[chatId]?.step === 'waiting_for_video') {
+                logDebug('Video Handler', 'Processing video step', {
+                    messageTypes: messageDebug.contentTypes,
+                    state: userState[chatId],
+                    hasVideo: !!msg.video,
+                    hasDocument: !!msg.document
                 });
 
-                // Получаем file_id видео
-                const fileId = msg.video?.file_id || msg.document?.file_id;
-                if (!fileId) {
-                    throw new Error('No video file ID found');
-                }
+                // Проверяем, является ли документ видео файлом
+                const isVideoDocument = msg.document &&
+                    msg.document.mime_type &&
+                    msg.document.mime_type.startsWith('video/');
 
-                // Получаем информацию о файле
-                const file = await bot.getFile(fileId);
-                logDebug('Video Handler', 'Got file info', file);
+                if (text?.toLowerCase() === 'пропустить' || text?.toLowerCase() === '-') {
+                    try {
+                        // Создаем продукт без видео
+                        const newProduct = {
+                            name: userState[chatId].productName,
+                            description: userState[chatId].productDescription,
+                            price: userState[chatId].productPrice,
+                            category: userState[chatId].productCategory,
+                            image: userState[chatId].productImage,
+                            chefId: chatId.toString()
+                        };
 
-                // Получаем ссылку на файл
-                const fileLink = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-                logDebug('Video Handler', 'Got file link', { fileLink });
+                        logDebug('Product Creation', 'Creating product without video', newProduct);
+                        const productResponse = await axios.post('http://api:5000/api/products', newProduct);
+                        logDebug('Product Creation', 'Product created successfully', productResponse.data);
 
-                // Загружаем видео
-                const videoResponse = await axios({
-                    method: 'get',
-                    url: fileLink,
-                    responseType: 'arraybuffer',
-                    maxContentLength: 50 * 1024 * 1024
-                });
-
-                logDebug('Video Handler', 'Downloaded video', {
-                    size: videoResponse.data.length,
-                    contentType: msg.video?.mime_type || msg.document?.mime_type
-                });
-
-                // Создаем форму
-                const form = new FormData();
-                const videoBuffer = Buffer.from(videoResponse.data);
-
-                form.append('video', videoBuffer, {
-                    filename: `video_${Date.now()}.mp4`,
-                    contentType: msg.video?.mime_type || msg.document?.mime_type || 'video/mp4'
-                });
-
-                // Отправляем на сервер
-                const uploadResponse = await axios.post(
-                    'http://api:5000/api/videos/upload',
-                    form,
-                    {
-                        headers: {
-                            ...form.getHeaders(),
-                            'Content-Length': form.getLengthSync()
-                        },
-                        maxContentLength: 50 * 1024 * 1024,
-                        maxBodyLength: 50 * 1024 * 1024
+                        await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен! 📸`);
+                        setTimeout(async () => {
+                            await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
+                        }, 2000);
+                        delete userState[chatId];
+                        return;
+                    } catch (error) {
+                        logDebug('Product Creation', 'Error creating product', error);
+                        await sendMessageWithDelete(chatId, 'Произошла ошибка при создании продукта. Попробуйте снова.');
+                        return;
                     }
-                );
+                } else if (msg.video || (msg.document && msg.document.mime_type?.startsWith('video/'))) {
+                    try {
+                        logDebug('Video Handler', 'Starting video processing', {
+                            video: msg.video,
+                            document: msg.document
+                        });
 
-                logDebug('Video Handler', 'Upload response', uploadResponse.data);
+                        // Получаем file_id видео
+                        const fileId = msg.video?.file_id || msg.document?.file_id;
+                        if (!fileId) {
+                            throw new Error('No video file ID found');
+                        }
 
-                if (!uploadResponse.data.success) {
-                    throw new Error(uploadResponse.data.message || 'Failed to upload video');
+                        // Получаем информацию о файле
+                        const file = await bot.getFile(fileId);
+                        logDebug('Video Handler', 'Got file info', file);
+
+                        // Получаем ссылку на файл
+                        const fileLink = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+                        logDebug('Video Handler', 'Got file link', { fileLink });
+
+                        // Загружаем видео
+                        const videoResponse = await axios({
+                            method: 'get',
+                            url: fileLink,
+                            responseType: 'arraybuffer',
+                            maxContentLength: 50 * 1024 * 1024
+                        });
+
+                        logDebug('Video Handler', 'Downloaded video', {
+                            size: videoResponse.data.length,
+                            contentType: msg.video?.mime_type || msg.document?.mime_type
+                        });
+
+                        // Создаем форму
+                        const form = new FormData();
+                        const videoBuffer = Buffer.from(videoResponse.data);
+
+                        form.append('video', videoBuffer, {
+                            filename: `video_${Date.now()}.mp4`,
+                            contentType: msg.video?.mime_type || msg.document?.mime_type || 'video/mp4'
+                        });
+
+                        // Отправляем на сервер
+                        const uploadResponse = await axios.post(
+                            'http://api:5000/api/videos/upload',
+                            form,
+                            {
+                                headers: {
+                                    ...form.getHeaders(),
+                                    'Content-Length': form.getLengthSync()
+                                },
+                                maxContentLength: 50 * 1024 * 1024,
+                                maxBodyLength: 50 * 1024 * 1024
+                            }
+                        );
+
+                        logDebug('Video Handler', 'Upload response', uploadResponse.data);
+
+                        if (!uploadResponse.data.success) {
+                            throw new Error(uploadResponse.data.message || 'Failed to upload video');
+                        }
+
+                        // Создаем продукт с видео
+                        const newProduct = {
+                            name: userState[chatId].productName,
+                            description: userState[chatId].productDescription,
+                            price: userState[chatId].productPrice,
+                            category: userState[chatId].productCategory,
+                            image: userState[chatId].productImage,
+                            video: uploadResponse.data.video.filename,
+                            chefId: chatId.toString()
+                        };
+
+                        logDebug('Product Creation', 'Creating product with video', newProduct);
+                        const productResponse = await axios.post('http://api:5000/api/products', newProduct);
+                        logDebug('Product Creation', 'Product created successfully', productResponse.data);
+
+                        await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен с видео! 🎥`);
+                        setTimeout(async () => {
+                            await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
+                        }, 2000);
+                        delete userState[chatId];
+                        return;
+
+                    } catch (error) {
+                        logDebug('Video Handler', 'Error processing video', error);
+                        const errorMessage = error.response?.data?.message || error.message;
+                        await sendMessageWithDelete(chatId,
+                            `Ошибка при обработке видео: ${errorMessage}\n` +
+                            'Пожалуйста, попробуйте загрузить видео меньшего размера (максимум 50MB) или напишите "пропустить":'
+                        );
+                        return;
+                    }
+                } else {
+                    // Если получено сообщение другого типа
+                    logDebug('Video Handler', 'Received non-video message', {
+                        messageType: messageDebug.type,
+                        contentTypes: messageDebug.contentTypes
+                    });
+                    await sendMessageWithDelete(chatId,
+                        'Пожалуйста, отправьте видео файл или напишите "пропустить".\n' +
+                        'Видео можно отправить как видеосообщение или как файл.'
+                    );
+                    return;
                 }
-
-                // Создаем продукт с видео
-                const newProduct = {
-                    name: userState[chatId].productName,
-                    description: userState[chatId].productDescription,
-                    price: userState[chatId].productPrice,
-                    category: userState[chatId].productCategory,
-                    image: userState[chatId].productImage,
-                    video: uploadResponse.data.video.filename,
-                    chefId: chatId.toString()
-                };
-
-                logDebug('Product Creation', 'Creating product with video', newProduct);
-                const productResponse = await axios.post('http://api:5000/api/products', newProduct);
-                logDebug('Product Creation', 'Product created successfully', productResponse.data);
-
-                await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен с видео! 🎥`);
-                setTimeout(async () => {
-                    await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
-                }, 2000);
-                delete userState[chatId];
-                return;
-
-            } catch (error) {
-                logDebug('Video Handler', 'Error processing video', error);
-                const errorMessage = error.response?.data?.message || error.message;
-                await sendMessageWithDelete(chatId,
-                    `Ошибка при обработке видео: ${errorMessage}\n` +
-                    'Пожалуйста, попробуйте загрузить видео меньшего размера (максимум 50MB) или напишите "пропустить":'
-                );
-                return;
-            }
-        } else {
-            // Если получено сообщение другого типа
-            logDebug('Video Handler', 'Received non-video message', {
-                messageType: messageDebug.type,
-                contentTypes: messageDebug.contentTypes
-            });
-            await sendMessageWithDelete(chatId,
-                'Пожалуйста, отправьте видео файл или напишите "пропустить".\n' +
-                'Видео можно отправить как видеосообщение или как файл.'
-            );
-            return;
-        }
-    }
-
-    else if (userState[chatId]?.step === 'add_news_title') {
-        userState[chatId].newsTitle = text;
-        userState[chatId].step = 'add_news_content';
-        await sendMessageWithDelete(chatId, 'Введите содержание новости:');
-    }
-    else if (userState[chatId]?.step === 'add_news_content') {
-        try {
-            const newsData = {
-                title: userState[chatId].newsTitle,
-                content: text,
-                author: chatId.toString(),
-                status: 'active'
-            };
-
-            await axios.post('http://api:5000/api/news', newsData);
-            await sendMessageWithDelete(chatId, '✅ Новость успешно создана!');
-
-            setTimeout(async () => {
-                const newsMenu = {
-                    reply_markup: JSON.stringify({
-                        inline_keyboard: [
-                            [{ text: '📰 Все новости', callback_data: 'view_news' }],
-                            [{ text: '➕ Добавить новость', callback_data: 'add_news' }],
-                            [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
-                        ],
-                    }),
-                };
-                await sendMessageWithDelete(chatId, 'Управление новостями:', newsMenu);
-            }, 1000);
-
-            delete userState[chatId];
-        } catch (error) {
-            console.error('Error creating news:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при создании новости.');
-        }
-    }
-    else if (userState[chatId]?.step === 'add_expense_title') {
-        userState[chatId].expenseTitle = text;
-        userState[chatId].step = 'add_expense_amount';
-        await sendMessageWithDelete(chatId, 'Введите сумму расхода:');
-    }
-    else if (userState[chatId]?.step === 'add_expense_amount') {
-        const amount = parseFloat(text);
-        if (isNaN(amount) || amount < 0) {
-            await sendMessageWithDelete(chatId, 'Пожалуйста, введите корректную сумму.');
-            return;
-        }
-        userState[chatId].expenseAmount = amount;
-        userState[chatId].step = 'add_expense_category';
-        await sendMessageWithDelete(chatId, 'Введите категорию расхода:');
-    }
-    else if (userState[chatId]?.step === 'add_expense_category') {
-        userState[chatId].expenseCategory = text;
-        userState[chatId].step = 'add_expense_description';
-        await sendMessageWithDelete(chatId, 'Введите описание расхода (или отправьте "-" чтобы пропустить):');
-    }
-    else if (userState[chatId]?.step === 'add_expense_description') {
-        try {
-            const expenseData = {
-                chefId: chatId.toString(),
-                title: userState[chatId].expenseTitle,
-                amount: userState[chatId].expenseAmount,
-                category: userState[chatId].expenseCategory,
-                description: text === '-' ? '' : text,
-                date: new Date()
-            };
-
-            await axios.post('http://api:5000/api/expenses', expenseData);
-            await sendMessageWithDelete(chatId, '✅ Расход успешно добавлен!');
-
-            // Возвращаемся в меню расходов
-            setTimeout(async () => {
-                const expensesMenu = {
-                    reply_markup: JSON.stringify({
-                        inline_keyboard: [
-                            [{ text: '📊 Все расходы', callback_data: 'view_expenses' }],
-                            [{ text: '➕ Добавить расход', callback_data: 'add_expense' }],
-                            [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
-                        ],
-                    }),
-                };
-                await sendMessageWithDelete(chatId, 'Управление расходами:', expensesMenu);
-            }, 1000);
-
-            delete userState[chatId];
-        } catch (error) {
-            console.error('Error creating expense:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при создании расхода.');
-        }
-    }
-
-    else if (userState[chatId].step === 'add_product_image' && msg.photo) {
-        const photo = msg.photo[msg.photo.length - 1];
-        const fileId = photo.file_id;
-        try {
-            const fileLink = await bot.getFileLink(fileId);
-            const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
-            const buffer = Buffer.from(response.data);
-            const timestamp = Date.now();
-            const filename = `${timestamp}.jpg`;
-            const form = new FormData();
-            form.append('image', buffer, { filename: filename, contentType: 'image/jpeg' });
-            const imageResponse = await axios.post('http://api:5000/api/images/upload', form, { headers: form.getHeaders() });
-            const newProduct = {
-                name: userState[chatId].productName,
-                description: userState[chatId].productDescription,
-                price: userState[chatId].productPrice,
-                category: userState[chatId].productCategory,
-                image: imageResponse.data.image.filename,
-                chefId: chatId.toString()
-            };
-            await axios.post('http://api:5000/api/products', newProduct);
-            await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен!`);
-            setTimeout(async () => {
-                await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
-            }, 2000);
-            delete userState[chatId];
-        } catch (error) {
-            console.error('Error creating product:', error);
-            await sendMessageWithDelete(chatId, 'Произошла ошибка при создании продукта.');
-        }
-    } else if (userState[chatId].step === 'enter_quantity') {
-        console.log(`[enter_quantity] Processing quantity for chat ${chatId}`);
-        console.log(`[enter_quantity] Current state:`, userState[chatId]);
-
-        const quantity = parseInt(text);
-        if (isNaN(quantity) || quantity <= 0) {
-            console.log(`[enter_quantity] Invalid quantity entered: ${text}`);
-            await sendMessageWithDelete(chatId, 'Пожалуйста, введите корректное количество (положительное число).');
-            return;
-        }
-
-        console.log(`[enter_quantity] Valid quantity entered: ${quantity}`);
-        userState[chatId].quantity = quantity;
-        userState[chatId].step = 'enter_description';
-        console.log(`[enter_quantity] Updated state:`, userState[chatId]);
-
-        await sendMessageWithDelete(chatId, 'Введите описание к заказу (например, особые пожелания):');
-    } else if (userState[chatId].step === 'enter_description') {
-        userState[chatId].description = text;
-        userState[chatId].step = 'enter_phone';
-        await sendMessageWithDelete(chatId, 'Введите ваш контактный телефон:');
-    } else if (userState[chatId].step === 'enter_phone') {
-        if (!/^\+?\d{10,12}$/.test(text.replace(/\s/g, ''))) {
-            await sendMessageWithDelete(chatId, 'Пожалуйста, введите корректный номер телефона (10-12 цифр).');
-            return;
-        }
-        userState[chatId].phone = text;
-        userState[chatId].step = 'enter_address';
-        await sendMessageWithDelete(chatId, 'Введите адрес доставки:');
-    } else if (userState[chatId].step === 'enter_address') {
-        try {
-            const order = {
-                clientId: chatId.toString(),
-                telegramId: msg.from.username || null,
-                phone: userState[chatId].phone,
-                products: [{
-                    productId: userState[chatId].selectedProduct._id,
-                    name: userState[chatId].selectedProduct.name,
-                    quantity: userState[chatId].quantity,
-                    price: userState[chatId].selectedProduct.price,
-                }],
-                description: userState[chatId].description,
-                status: 'Новый',
-                totalAmount: userState[chatId].selectedProduct.price * userState[chatId].quantity,
-                paymentStatus: 'Ожидает оплаты',
-                paymentMethod: 'Наличные',
-                paymentDetails: { paidAmount: 0, paymentDate: null, transactionId: null, paymentProvider: null, receiptNumber: null },
-                shippingAddress: text,
-                deliveryInfo: { type: 'Курьер', trackingNumber: null, courierName: null, courierPhone: null, estimatedDeliveryDate: null, actualDeliveryDate: null, deliveryInstructions: userState[chatId].description },
-                contactEmail: `${chatId}@telegram.com`,
-                contactPhone: userState[chatId].phone,
-                statusHistory: [{ status: 'Новый', timestamp: new Date(), comment: 'Заказ создан через Telegram бота', updatedBy: 'system' }],
-                chefId: userState[chatId].selectedProduct.chefId
-            };
-
-            console.log('[Order Creation] Creating order with data:', JSON.stringify(order, null, 2));
-            const createResponse = await axios.post('http://api:5000/api/orders', order);
-            const createdOrder = createResponse.data.order || createResponse.data;
-            console.log('[Order Creation] API response:', JSON.stringify(createResponse.data, null, 2));
-
-            // Проверяем, что у нас есть ID заказа
-            if (!createdOrder._id) {
-                console.error('[Order Creation] No order ID in response:', createResponse.data);
             }
 
-            // Формируем информацию о заказе
-            let orderInfo = `Заказ успешно создан!${createdOrder._id ? ` №${createdOrder._id.slice(-4)}` : ''}\n\n` +
-                `Продукт: ${userState[chatId].selectedProduct.name}\n` +
-                `Количество: ${userState[chatId].quantity}\n` +
-                `Сумма: ${order.totalAmount} ₽\n` +
-                `Телефон: ${userState[chatId].phone}\n` +
-                `Адрес доставки: ${text}\n` +
-                `Описание: ${userState[chatId].description}\n\n` +
-                `Статус: ${order.status}\n` +
-                `Оплата: ${order.paymentStatus}\n\n` +
-                `Состав заказа:\n`;
-
-            order.products.forEach((prod, index) => {
-                const prodName = prod.name || prod.productName || 'Неизвестный продукт';
-                orderInfo += `  ${index + 1}. ${prodName} x ${prod.quantity} — ${prod.price} ₽ за шт, Итого: ${prod.price * prod.quantity} ₽\n`;
-            });
-
-            // Отправляем подтверждение клиенту
-            await sendMessageWithDelete(chatId, orderInfo);
-
-            // Отправляем уведомление повару с гарантированным ID заказа
-            if (order.chefId) {
-                const chefNotification =
-                    `🔔 Новый заказ №${createdOrder._id?.slice(-4) || 'Новый'}!\n\n` +
-                    `📦 Продукт: ${userState[chatId].selectedProduct.name}\n` +
-                    `📊 Количество: ${userState[chatId].quantity}\n` +
-                    `💰 Сумма: ${order.totalAmount} ₽\n\n` +
-                    `📝 Статус: ${order.status}\n` +
-                    `📍 Адрес доставки: ${text}\n` +
-                    `💭 Комментарий: ${order.description || 'Нет'}\n\n` +
-                    `👤 Контакты клиента:\n` +
-                    `📱 Телефон: ${order.contactPhone}\n` +
-                    (order.telegramId ? `📧 Telegram: @${order.telegramId}` : '');
-
+            else if (userState[chatId]?.step === 'add_news_title') {
+                userState[chatId].newsTitle = text;
+                userState[chatId].step = 'add_news_content';
+                await sendMessageWithDelete(chatId, 'Введите содержание новости:');
+            }
+            else if (userState[chatId]?.step === 'add_news_content') {
                 try {
-                    await bot.sendMessage(order.chefId, chefNotification);
-                    console.log(`[Order Creation] Chef notification sent to ${order.chefId} with order ID ${createdOrder._id}`);
-                } catch (notificationError) {
-                    console.error('[Order Creation] Error sending chef notification:', notificationError);
+                    const newsData = {
+                        title: userState[chatId].newsTitle,
+                        content: text,
+                        author: chatId.toString(),
+                        status: 'active'
+                    };
+
+                    await axios.post('http://api:5000/api/news', newsData);
+                    await sendMessageWithDelete(chatId, '✅ Новость успешно создана!');
+
+                    setTimeout(async () => {
+                        const newsMenu = {
+                            reply_markup: JSON.stringify({
+                                inline_keyboard: [
+                                    [{ text: '📰 Все новости', callback_data: 'view_news' }],
+                                    [{ text: '➕ Добавить новость', callback_data: 'add_news' }],
+                                    [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                                ],
+                            }),
+                        };
+                        await sendMessageWithDelete(chatId, 'Управление новостями:', newsMenu);
+                    }, 1000);
+
+                    delete userState[chatId];
+                } catch (error) {
+                    console.error('Error creating news:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при создании новости.');
+                }
+            }
+            else if (userState[chatId]?.step === 'add_expense_title') {
+                userState[chatId].expenseTitle = text;
+                userState[chatId].step = 'add_expense_amount';
+                await sendMessageWithDelete(chatId, 'Введите сумму расхода:');
+            }
+            else if (userState[chatId]?.step === 'add_expense_amount') {
+                const amount = parseFloat(text);
+                if (isNaN(amount) || amount < 0) {
+                    await sendMessageWithDelete(chatId, 'Пожалуйста, введите корректную сумму.');
+                    return;
+                }
+                userState[chatId].expenseAmount = amount;
+                userState[chatId].step = 'add_expense_category';
+                await sendMessageWithDelete(chatId, 'Введите категорию расхода:');
+            }
+            else if (userState[chatId]?.step === 'add_expense_category') {
+                userState[chatId].expenseCategory = text;
+                userState[chatId].step = 'add_expense_description';
+                await sendMessageWithDelete(chatId, 'Введите описание расхода (или отправьте "-" чтобы пропустить):');
+            }
+            else if (userState[chatId]?.step === 'add_expense_description') {
+                try {
+                    const expenseData = {
+                        chefId: chatId.toString(),
+                        title: userState[chatId].expenseTitle,
+                        amount: userState[chatId].expenseAmount,
+                        category: userState[chatId].expenseCategory,
+                        description: text === '-' ? '' : text,
+                        date: new Date()
+                    };
+
+                    await axios.post('http://api:5000/api/expenses', expenseData);
+                    await sendMessageWithDelete(chatId, '✅ Расход успешно добавлен!');
+
+                    // Возвращаемся в меню расходов
+                    setTimeout(async () => {
+                        const expensesMenu = {
+                            reply_markup: JSON.stringify({
+                                inline_keyboard: [
+                                    [{ text: '📊 Все расходы', callback_data: 'view_expenses' }],
+                                    [{ text: '➕ Добавить расход', callback_data: 'add_expense' }],
+                                    [{ text: '⬅️ Назад', callback_data: 'back_to_management' }]
+                                ],
+                            }),
+                        };
+                        await sendMessageWithDelete(chatId, 'Управление расходами:', expensesMenu);
+                    }, 1000);
+
+                    delete userState[chatId];
+                } catch (error) {
+                    console.error('Error creating expense:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при создании расхода.');
                 }
             }
 
-            // Очищаем состояние и показываем главное меню
-            setTimeout(async () => {
-                await sendMessageWithDelete(chatId, 'Что желаете сделать дальше?', mainMenu);
-            }, 2000);
-            delete userState[chatId];
+            else if (userState[chatId].step === 'add_product_image' && msg.photo) {
+                const photo = msg.photo[msg.photo.length - 1];
+                const fileId = photo.file_id;
+                try {
+                    const fileLink = await bot.getFileLink(fileId);
+                    const response = await axios.get(fileLink, { responseType: 'arraybuffer' });
+                    const buffer = Buffer.from(response.data);
+                    const timestamp = Date.now();
+                    const filename = `${timestamp}.jpg`;
+                    const form = new FormData();
+                    form.append('image', buffer, { filename: filename, contentType: 'image/jpeg' });
+                    const imageResponse = await axios.post('http://api:5000/api/images/upload', form, { headers: form.getHeaders() });
+                    const newProduct = {
+                        name: userState[chatId].productName,
+                        description: userState[chatId].productDescription,
+                        price: userState[chatId].productPrice,
+                        category: userState[chatId].productCategory,
+                        image: imageResponse.data.image.filename,
+                        chefId: chatId.toString()
+                    };
+                    await axios.post('http://api:5000/api/products', newProduct);
+                    await sendMessageWithDelete(chatId, `Продукт "${newProduct.name}" успешно добавлен!`);
+                    setTimeout(async () => {
+                        await sendMessageWithDelete(chatId, 'Добро пожаловать в наш магазин! 👋🥩🐟🍞🥓🍲', mainMenu);
+                    }, 2000);
+                    delete userState[chatId];
+                } catch (error) {
+                    console.error('Error creating product:', error);
+                    await sendMessageWithDelete(chatId, 'Произошла ошибка при создании продукта.');
+                }
+            } else if (userState[chatId].step === 'enter_quantity') {
+                console.log(`[enter_quantity] Processing quantity for chat ${chatId}`);
+                console.log(`[enter_quantity] Current state:`, userState[chatId]);
+
+                const quantity = parseInt(text);
+                if (isNaN(quantity) || quantity <= 0) {
+                    console.log(`[enter_quantity] Invalid quantity entered: ${text}`);
+                    await sendMessageWithDelete(chatId, 'Пожалуйста, введите корректное количество (положительное число).');
+                    return;
+                }
+
+                console.log(`[enter_quantity] Valid quantity entered: ${quantity}`);
+                userState[chatId].quantity = quantity;
+                userState[chatId].step = 'enter_description';
+                console.log(`[enter_quantity] Updated state:`, userState[chatId]);
+
+                await sendMessageWithDelete(chatId, 'Введите описание к заказу (например, особые пожелания):');
+            } else if (userState[chatId].step === 'enter_description') {
+                userState[chatId].description = text;
+                userState[chatId].step = 'enter_phone';
+                await sendMessageWithDelete(chatId, 'Введите ваш контактный телефон:');
+            } else if (userState[chatId].step === 'enter_phone') {
+                if (!/^\+?\d{10,12}$/.test(text.replace(/\s/g, ''))) {
+                    await sendMessageWithDelete(chatId, 'Пожалуйста, введите корректный номер телефона (10-12 цифр).');
+                    return;
+                }
+                userState[chatId].phone = text;
+                userState[chatId].step = 'enter_address';
+                await sendMessageWithDelete(chatId, 'Введите адрес доставки:');
+            } else if (userState[chatId].step === 'enter_address') {
+                try {
+                    const order = {
+                        clientId: chatId.toString(),
+                        telegramId: msg.from.username || null,
+                        phone: userState[chatId].phone,
+                        products: [{
+                            productId: userState[chatId].selectedProduct._id,
+                            name: userState[chatId].selectedProduct.name,
+                            quantity: userState[chatId].quantity,
+                            price: userState[chatId].selectedProduct.price,
+                        }],
+                        description: userState[chatId].description,
+                        status: 'Новый',
+                        totalAmount: userState[chatId].selectedProduct.price * userState[chatId].quantity,
+                        paymentStatus: 'Ожидает оплаты',
+                        paymentMethod: 'Наличные',
+                        paymentDetails: { paidAmount: 0, paymentDate: null, transactionId: null, paymentProvider: null, receiptNumber: null },
+                        shippingAddress: text,
+                        deliveryInfo: { type: 'Курьер', trackingNumber: null, courierName: null, courierPhone: null, estimatedDeliveryDate: null, actualDeliveryDate: null, deliveryInstructions: userState[chatId].description },
+                        contactEmail: `${chatId}@telegram.com`,
+                        contactPhone: userState[chatId].phone,
+                        statusHistory: [{ status: 'Новый', timestamp: new Date(), comment: 'Заказ создан через Telegram бота', updatedBy: 'system' }],
+                        chefId: userState[chatId].selectedProduct.chefId
+                    };
+
+                    console.log('[Order Creation] Creating order with data:', JSON.stringify(order, null, 2));
+                    const createResponse = await axios.post('http://api:5000/api/orders', order);
+                    const createdOrder = createResponse.data.order || createResponse.data;
+                    console.log('[Order Creation] API response:', JSON.stringify(createResponse.data, null, 2));
+
+                    // Проверяем, что у нас есть ID заказа
+                    if (!createdOrder._id) {
+                        console.error('[Order Creation] No order ID in response:', createResponse.data);
+                    }
+
+                    // Формируем информацию о заказе
+                    let orderInfo = `Заказ успешно создан!${createdOrder._id ? ` №${createdOrder._id.slice(-4)}` : ''}\n\n` +
+                        `Продукт: ${userState[chatId].selectedProduct.name}\n` +
+                        `Количество: ${userState[chatId].quantity}\n` +
+                        `Сумма: ${order.totalAmount} ₽\n` +
+                        `Телефон: ${userState[chatId].phone}\n` +
+                        `Адрес доставки: ${text}\n` +
+                        `Описание: ${userState[chatId].description}\n\n` +
+                        `Статус: ${order.status}\n` +
+                        `Оплата: ${order.paymentStatus}\n\n` +
+                        `Состав заказа:\n`;
+
+                    order.products.forEach((prod, index) => {
+                        const prodName = prod.name || prod.productName || 'Неизвестный продукт';
+                        orderInfo += `  ${index + 1}. ${prodName} x ${prod.quantity} — ${prod.price} ₽ за шт, Итого: ${prod.price * prod.quantity} ₽\n`;
+                    });
+
+                    // Отправляем подтверждение клиенту
+                    await sendMessageWithDelete(chatId, orderInfo);
+
+                    // Отправляем уведомление повару с гарантированным ID заказа
+                    if (order.chefId) {
+                        const chefNotification =
+                            `🔔 Новый заказ №${createdOrder._id?.slice(-4) || 'Новый'}!\n\n` +
+                            `📦 Продукт: ${userState[chatId].selectedProduct.name}\n` +
+                            `📊 Количество: ${userState[chatId].quantity}\n` +
+                            `💰 Сумма: ${order.totalAmount} ₽\n\n` +
+                            `📝 Статус: ${order.status}\n` +
+                            `📍 Адрес доставки: ${text}\n` +
+                            `💭 Комментарий: ${order.description || 'Нет'}\n\n` +
+                            `👤 Контакты клиента:\n` +
+                            `📱 Телефон: ${order.contactPhone}\n` +
+                            (order.telegramId ? `📧 Telegram: @${order.telegramId}` : '');
+
+                        try {
+                            await bot.sendMessage(order.chefId, chefNotification);
+                            console.log(`[Order Creation] Chef notification sent to ${order.chefId} with order ID ${createdOrder._id}`);
+                        } catch (notificationError) {
+                            console.error('[Order Creation] Error sending chef notification:', notificationError);
+                        }
+                    }
+
+                    // Очищаем состояние и показываем главное меню
+                    setTimeout(async () => {
+                        await sendMessageWithDelete(chatId, 'Что желаете сделать дальше?', mainMenu);
+                    }, 2000);
+                    delete userState[chatId];
+
+                } catch (error) {
+                    console.error('[Order Creation] Error:', error);
+                    console.error('[Order Creation] Full error details:', error.response?.data);
+                    const errorMessage = error.response?.data?.message || 'Произошла ошибка при создании заказа';
+                    await sendMessageWithDelete(chatId, `Ошибка: ${errorMessage}. Пожалуйста, попробуйте снова.`);
+
+                    setTimeout(async () => {
+                        await sendMessageWithDelete(chatId, 'Что желаете сделать дальше?', mainMenu);
+                    }, 2000);
+                }
+            }
 
         } catch (error) {
-            console.error('[Order Creation] Error:', error);
-            console.error('[Order Creation] Full error details:', error.response?.data);
-            const errorMessage = error.response?.data?.message || 'Произошла ошибка при создании заказа';
-            await sendMessageWithDelete(chatId, `Ошибка: ${errorMessage}. Пожалуйста, попробуйте снова.`);
-
-            setTimeout(async () => {
-                await sendMessageWithDelete(chatId, 'Что желаете сделать дальше?', mainMenu);
-            }, 2000);
+            botMetrics.errorCounter.inc({ type: 'message_processing' });
+            console.error('Error processing message:', error);
+            throw error;
         }
-    }
+    }, { type: 'message' });
+
+
+
+
+
+
 });
 
 app.listen(5001, () => {
