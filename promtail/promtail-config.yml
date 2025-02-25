@@ -15,4 +15,17 @@ scrape_configs:
           - localhost
         labels:
           job: varlogs
-          __path__: /var/log/*log
+          environment: test
+          user: maxwebgt
+          __path__: /var/log/*.log
+
+  # Добавьте конфигурацию для тестового лога
+  - job_name: test
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: testlogs
+          environment: test
+          user: maxwebgt
+          __path__: /var/log/mongod.log

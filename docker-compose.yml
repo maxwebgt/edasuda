@@ -166,7 +166,7 @@ services:
     volumes:
       - ./promtail:/etc/promtail
       - /var/log:/var/log
-      - ./logs:/var/log/mongodb:ro
+      - ./logs:/var/log:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command: -config.file=/etc/promtail/promtail-config.yml
     networks:
