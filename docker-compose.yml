@@ -89,16 +89,25 @@ services:
     container_name: tg_bot_app
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - NODE_ENV=production
     ports:
       - "5001:5001"
     volumes:
       - ./tg_bot:/app
       - /app/node_modules
+      - pm2_logs:/var/log/pm2
     depends_on:
       - mongo
       - api
+      - loki
     networks:
       - monitoring
+    restart: unless-stopped
+    logging:
+      driver: "json-file"  # Используем стандартный драйвер как fallback
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   prometheus:
     image: prom/prometheus:latest
@@ -142,23 +151,23 @@ services:
     user: "472" # Fix permissions issues
 
   loki:
-    image: grafana/loki:2.9.0
+    image: grafana/loki:2.9.2
     container_name: loki
-    volumes:
-      - ./loki:/etc/loki
-      - loki_data:/loki
-      - ./wal:/loki/wal
+    user: "root"
     ports:
       - "3100:3100"
-    command: -config.file=/etc/loki/loki-config.yml -config.expand-env=true
+    volumes:
+      - ./loki/config:/etc/loki
+      - ./loki/data:/loki
+      - ./loki/wal:/wal
+      - ./loki/chunks:/chunks
+      - ./loki/compactor:/compactor
+      - ./loki/rules:/rules    # Добавляем директорию для правил
+    command: "-config.file=/etc/loki/local-config.yaml"
     networks:
       - monitoring
     restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+
 
   promtail:
     image: grafana/promtail:latest
@@ -173,15 +182,18 @@ services:
       - monitoring
     restart: unless-stopped
     user: root
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
+  pm2_logs:
+    driver: local
   mongo_data:
     driver: local
   prometheus_data:
     driver: local
   grafana_data:
-    driver: local
-  loki_data:
-    driver: local
-  wal:
     driver: local

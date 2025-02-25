@@ -1,21 +1,22 @@
-# Используем официальный Node.js образ
-FROM node:16
+FROM node:18
 
-# Устанавливаем рабочую директорию внутри контейнера
+# Устанавливаем PM2 глобально
+RUN npm install pm2 -g
+
 WORKDIR /app
 
-# Копируем package.json и устанавливаем зависимости
-COPY package.json /app
-RUN npm install
+# Копируем файлы package.json и package-lock.json
+COPY package*.json ./
 
-# Копируем весь код бота в контейнер
-COPY . /app
+# Устанавливаем зависимости
+RUN npm install --production
 
-# Устанавливаем nodemon глобально
-RUN npm install -g nodemon
+# Копируем исходный код и конфигурационные файлы
+COPY . .
+COPY ecosystem.config.js .
 
-# Открываем порт, на котором будет работать бот
-EXPOSE 5001
+# Создаем директорию для логов PM2
+RUN mkdir -p /var/log/pm2
 
-# Запускаем бота с помощью nodemon
-CMD ["npm", "run", "dev"]
+# Запускаем приложение через PM2 в production режиме
+CMD ["pm2-runtime", "ecosystem.config.js"]
