@@ -129,11 +129,14 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_SESSION_PROVIDER=memory
+      - GF_PROVISIONING_DATASOURCES_DEFAULT_UID=prometheus
     ports:
       - "3000:3000"
     networks:
       - monitoring
     restart: unless-stopped
+    depends_on:
+      - prometheus
     user: "472" # Fix permissions issues
 
   loki:
