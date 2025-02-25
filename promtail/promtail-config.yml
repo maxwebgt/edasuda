@@ -16,21 +16,3 @@ scrape_configs:
         labels:
           job: varlogs
           __path__: /var/log/*log
-
-  - job_name: mongodb_logs
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: mongodb
-          __path__: /var/log/mongodb/mongod.log
-
-  - job_name: docker
-    docker_sd_configs:
-      - host: "unix:///var/run/docker.sock"
-        refresh_interval: 5s
-    relabel_configs:
-      - source_labels: ['__meta_docker_container_name']
-        target_label: container_name
-      - source_labels: ['__meta_docker_container_log_stream']
-        target_label: stream

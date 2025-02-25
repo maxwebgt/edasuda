@@ -60,6 +60,7 @@ services:
       - mongo
     networks:
       - monitoring
+
   mongodb_exporter:
     image: bitnami/mongodb-exporter:latest
     container_name: mongodb_exporter
@@ -80,6 +81,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
   tg_bot:
     build:
       context: ./tg_bot
@@ -140,11 +142,12 @@ services:
     user: "472" # Fix permissions issues
 
   loki:
-    image: grafana/loki:2.9.0  # Указываем конкретную версию
+    image: grafana/loki:2.9.0
     container_name: loki
     volumes:
       - ./loki:/etc/loki
       - loki_data:/loki
+      - ./wal:/loki/wal
     ports:
       - "3100:3100"
     command: -config.file=/etc/loki/loki-config.yml -config.expand-env=true
@@ -164,12 +167,12 @@ services:
       - ./promtail:/etc/promtail
       - /var/log:/var/log
       - ./logs:/var/log/mongodb:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro # Добавляем доступ к Docker socket
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     command: -config.file=/etc/promtail/promtail-config.yml
     networks:
       - monitoring
     restart: unless-stopped
-    user: root # Добавляем для доступа к docker.sock
+    user: root
 
 volumes:
   mongo_data:
@@ -179,4 +182,6 @@ volumes:
   grafana_data:
     driver: local
   loki_data:
+    driver: local
+  wal:
     driver: local
