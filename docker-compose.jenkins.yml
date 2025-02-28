@@ -15,6 +15,7 @@ services:
       - ./Jenkinsfile:/var/jenkins_home/workspace/Projects_edasuda-pipeline/Jenkinsfile
       #- ./:/var/jenkins_home/workspace/Projects/edasuda-pipeline:rw
       - ./jenkins/init.groovy.d:/var/jenkins_home/init.groovy.d
+      - ./jenkins/casc_configs:/var/jenkins_home/casc_configs
     ports:
       - "8082:8080"
       - "50000:50000"
@@ -30,6 +31,7 @@ services:
       - MONGO_URI=mongodb://root:${MONGO_URI_PASSWORD:-example}@mongo:27017/admin
       - JENKINS_UC_INSECURE=true
       - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+      - CASC_JENKINS_CONFIG=/var/jenkins_home/casc_configs/
     command: >
       bash -c "
         mkdir -p /var/jenkins_home/workspace/Projects &&

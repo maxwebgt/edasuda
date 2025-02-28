@@ -75,7 +75,26 @@ pipeline {
                 }
             }
         }
-        
+        stage('Prepare Docker') {
+            steps {
+                sh 'ls -la ./path/to/config'
+                sh 'docker-compose -f docker-compose.yml up -d'
+            }
+        }
+        // Build Frontend
+        stage('Build Frontend') {
+            steps {
+                echo "Building frontend..."
+                sh 'ls -la'
+                
+                dir('frontend') {
+                    sh 'ls -la || true'
+                    sh 'npm --version && node --version'
+                    sh 'npm install || true'
+                    sh 'npm run build || true'
+                }
+            }
+}
         // Deploy using Docker
         // Deploy using Docker
         stage('Deploy') {
