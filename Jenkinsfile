@@ -69,6 +69,9 @@ pipeline {
                 
                 dir('backend') {
                     sh 'ls -la || true'
+                    sh 'ls -la || true'
+                    sh 'npm --version && node --version'
+                    sh 'ls -la || true'
                     sh 'npm --version && node --version'
                     sh 'npm install || true'
                     sh 'npm run build || true'
@@ -80,14 +83,16 @@ pipeline {
         stage('Deploy') {
             steps {
                 echo "Deploying application..."
+                echo "User: $USER, Directory: $(pwd)"
                 sh '''
+                    
                     # First try docker-compose command
                     if command -v docker-compose &> /dev/null; then
                         echo "Using docker-compose command"
                         # Explicitly use docker-compose.yml (not docker-compose.jenkins.yml)
                         docker-compose -f docker-compose.yml down || true
                         docker-compose -f docker-compose.yml build
-                        docker-compose -f docker-compose.yml up -d
+                        docker-compose -f docker-compose.yml up -d --verbose
                     else
                         echo "Error: Docker Compose not available"
                         exit 1
