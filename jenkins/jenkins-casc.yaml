@@ -1,0 +1,96 @@
+jenkins:
+  systemMessage: "Jenkins configured automatically via Jenkins Configuration as Code plugin"
+  numExecutors: 2
+  scmCheckoutRetryCount: 3
+  mode: NORMAL
+  
+  securityRealm:
+    local:
+      allowsSignup: false
+      users:
+        - id: "admin"
+          password: "${JENKINS_ADMIN_PASSWORD}"
+
+  authorizationStrategy:
+    loggedInUsersCanDoAnything:
+      allowAnonymousRead: false
+      
+  clouds:
+    - docker:
+        name: "docker"
+        dockerHost:
+          uri: "unix:///var/run/docker.sock"
+        
+  nodes:
+    - permanent:
+        name: "agent1"
+        remoteFS: "/home/jenkins/agent"
+        numExecutors: 1
+        labelString: "docker-agent"
+        mode: NORMAL
+        launcher:
+          jnlp:
+            workDirSettings:
+              disabled: false
+              failIfWorkDirIsMissing: false
+              internalDir: "remoting"
+
+credentials:
+  system:
+    domainCredentials:
+      - credentials:
+          - string:
+              scope: GLOBAL
+              id: "mongo-uri"
+              secret: "${MONGO_URI}"
+              description: "MongoDB URI"
+          - string:
+              scope: GLOBAL
+              id: "telegram-bot-token"
+              secret: "${TELEGRAM_BOT_TOKEN}"
+              description: "Telegram Bot Token"
+          - usernamePassword:
+              scope: GLOBAL
+              id: "github-credentials"
+              username: "${GITHUB_USERNAME}"
+              password: "${GITHUB_TOKEN}"
+              description: "GitHub Credentials"
+
+jobs:
+  - script: >
+      folder('Projects')
+
+      pipelineJob('Projects/edasuda-pipeline') {
+        definition {
+          cpsScmFlowDefinition {
+            scriptPath('Jenkinsfile')
+            scm {
+              git {
+                remote {
+                  url('${REPOSITORY_URL}')
+                  credentials('github-credentials')
+                }
+                branches('*/main')
+              }
+            }
+            lightweight(true)
+          }
+        }
+        triggers {
+          scm('H/5 * * * *')
+        }
+        logRotator {
+          numToKeep(10)
+          artifactNumToKeep(5)
+        }
+      }
+
+unclassified:
+  location:
+    url: http://localhost:8082/
+  
+security:
+  scriptApproval:
+    approvedSignatures:
+      - "method java.lang.String trim"
+      - "staticMethod org.codehaus.groovy.runtime.DefaultGroovyMethods execute java.lang.String"

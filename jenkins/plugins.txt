@@ -1,0 +1,10 @@
+workflow-aggregator
+git
+github
+docker-workflow
+credentials-binding
+timestamper
+job-dsl
+blueocean:1.27.0
+pipeline-stage-view
+prometheus
