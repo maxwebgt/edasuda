@@ -77,24 +77,20 @@ pipeline {
         }
         
         // Deploy using Docker
+        // Deploy using Docker
         stage('Deploy') {
             steps {
                 echo "Deploying application..."
+                echo "User: $USER, Directory: $(pwd)"
                 sh '''
+                    
                     # First try docker-compose command
                     if command -v docker-compose &> /dev/null; then
                         echo "Using docker-compose command"
-                        docker-compose down || true
-                        docker-compose build
-                        docker-compose up -d
-                        
-                    # Next try docker compose plugin
-                    elif command -v docker &> /dev/null && docker compose version &> /dev/null; then
-                        echo "Using docker compose plugin"
-                        docker compose down || true
-                        docker compose build
-                        docker compose up -d
-                        
+                        # Explicitly use docker-compose.yml (not docker-compose.jenkins.yml)
+                        docker-compose -f docker-compose.yml down || true
+                        docker-compose -f docker-compose.yml build
+                        docker-compose -f docker-compose.yml up -d --verbose
                     else
                         echo "Error: Docker Compose not available"
                         exit 1
