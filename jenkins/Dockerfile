@@ -43,23 +43,15 @@ RUN groupadd -g 999 docker 2>/dev/null || true && \
 COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
 RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
 
-# Create necessary directories
-RUN mkdir -p /var/jenkins_home/workspace/Projects /var/jenkins_home/casc_configs/ 
+# Create necessary directories and set permissions
+RUN mkdir -p /var/jenkins_home/workspace/Projects /var/jenkins_home/casc_configs/ && \
+    chown -R jenkins:jenkins /var/jenkins_home
 
 # Copy Groovy scripts
 COPY init.groovy.d/ /usr/share/jenkins/ref/init.groovy.d/
-
-# Create a script that will be executed when the container starts
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-# Set ownership and fix permissions
-RUN chown -R jenkins:jenkins /var/jenkins_home /usr/local/bin/entrypoint.sh
 
 # Skip initial setup wizard
 ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false"
 
 # Switch back to jenkins user
 USER jenkins
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
