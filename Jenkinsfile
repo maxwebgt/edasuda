@@ -81,7 +81,8 @@ pipeline {
         stage('Deploy') {
             steps {
                 echo "Deploying application..."
-                echo "User: $USER, Directory: ${pwd}"
+                echo "Environment Variables: ${env}"
+                echo "User: ${env.USER}, Directory: ${sh(script: 'pwd', returnStdout: true).trim()}"
                 sh '''
                     
                     # First try docker-compose command
