@@ -9,7 +9,7 @@ services:
     container_name: jenkins_edasuda  # Change from 'jenkins' to 'jenkins_edasuda'
     user: root
     volumes:
-      - jenkins_home:/var/jenkins_home
+      - ./jenkins_home:/var/jenkins_home
       - /var/run/docker.sock:/var/run/docker.sock
       - ./:/workspace:ro  # Mount project root as read-only to /workspace
       - ./Jenkinsfile:/var/jenkins_home/workspace/Projects_edasuda-pipeline/Jenkinsfile
