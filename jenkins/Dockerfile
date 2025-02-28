@@ -43,47 +43,15 @@ RUN groupadd -g 999 docker 2>/dev/null || true && \
 COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
 RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
 
-# Create necessary directories
-RUN mkdir -p /var/jenkins_home/workspace/Projects /var/jenkins_home/casc_configs/ 
+# Create necessary directories and set permissions
+RUN mkdir -p /var/jenkins_home/workspace/Projects /var/jenkins_home/casc_configs/ && \
+    chown -R jenkins:jenkins /var/jenkins_home
 
 # Copy Groovy scripts
 COPY init.groovy.d/ /usr/share/jenkins/ref/init.groovy.d/
-
-# Create the entrypoint script directly in Dockerfile
-RUN echo '#!/bin/bash' > /usr/local/bin/entrypoint.sh && \
-    echo 'mkdir -p /var/jenkins_home/workspace/Projects' >> /usr/local/bin/entrypoint.sh && \
-    echo 'mkdir -p /var/jenkins_home/init.groovy.d' >> /usr/local/bin/entrypoint.sh && \
-    echo 'chmod -R 777 /var/jenkins_home/workspace' >> /usr/local/bin/entrypoint.sh && \
-    echo 'cat > /var/jenkins_home/init.groovy.d/disable-security.groovy << ENDGROOVY' >> /usr/local/bin/entrypoint.sh && \
-    echo 'import jenkins.model.*' >> /usr/local/bin/entrypoint.sh && \
-    echo 'import hudson.security.*' >> /usr/local/bin/entrypoint.sh && \
-    echo '' >> /usr/local/bin/entrypoint.sh && \
-    echo '// Get Jenkins instance' >> /usr/local/bin/entrypoint.sh && \
-    echo 'def jenkins = Jenkins.getInstance()' >> /usr/local/bin/entrypoint.sh && \
-    echo '' >> /usr/local/bin/entrypoint.sh && \
-    echo '// Disable security' >> /usr/local/bin/entrypoint.sh && \
-    echo 'def strategy = new hudson.security.AuthorizationStrategy.Unsecured()' >> /usr/local/bin/entrypoint.sh && \
-    echo 'jenkins.setAuthorizationStrategy(strategy)' >> /usr/local/bin/entrypoint.sh && \
-    echo '' >> /usr/local/bin/entrypoint.sh && \
-    echo 'def realm = new HudsonPrivateSecurityRealm(false)' >> /usr/local/bin/entrypoint.sh && \
-    echo 'jenkins.setSecurityRealm(realm)' >> /usr/local/bin/entrypoint.sh && \
-    echo '' >> /usr/local/bin/entrypoint.sh && \
-    echo '// Save configuration' >> /usr/local/bin/entrypoint.sh && \
-    echo 'jenkins.save()' >> /usr/local/bin/entrypoint.sh && \
-    echo '' >> /usr/local/bin/entrypoint.sh && \
-    echo 'println "Security has been disabled"' >> /usr/local/bin/entrypoint.sh && \
-    echo 'ENDGROOVY' >> /usr/local/bin/entrypoint.sh && \
-    echo 'chmod 644 /var/jenkins_home/init.groovy.d/*.groovy 2>/dev/null || true' >> /usr/local/bin/entrypoint.sh && \
-    echo 'exec /usr/local/bin/jenkins.sh "$@"' >> /usr/local/bin/entrypoint.sh && \
-    chmod +x /usr/local/bin/entrypoint.sh
-
-# Set ownership and fix permissions
-RUN chown -R jenkins:jenkins /var/jenkins_home /usr/local/bin/entrypoint.sh
 
 # Skip initial setup wizard
 ENV JAVA_OPTS="-Djenkins.install.runSetupWizard=false"
 
 # Switch back to jenkins user
 USER jenkins
-
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
