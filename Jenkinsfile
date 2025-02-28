@@ -91,7 +91,7 @@ pipeline {
                         # Explicitly use docker-compose.yml (not docker-compose.jenkins.yml)
                         docker-compose -f docker-compose.yml down || true
                         docker-compose -f docker-compose.yml build
-                        docker-compose -f docker-compose.yml up -d --verbose
+                        docker-compose -f docker-compose.yml up -d
                     else
                         echo "Error: Docker Compose not available"
                         exit 1
