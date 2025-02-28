@@ -31,7 +31,7 @@ services:
       - MONGO_URI=mongodb://root:${MONGO_URI_PASSWORD:-example}@mongo:27017/admin
       - JENKINS_UC_INSECURE=true
       - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
-      - CASC_JENKINS_CONFIG=/var/jenkins_home/casc_configs/
+      #- CASC_JENKINS_CONFIG=/var/jenkins_home/casc_configs/
     command: >
       bash -c "
         mkdir -p /var/jenkins_home/workspace/Projects &&
