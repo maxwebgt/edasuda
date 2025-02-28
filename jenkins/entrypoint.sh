@@ -44,7 +44,7 @@ else
 fi
 
 # Set proper permissions
-chmod 644 /var/jenkins_home/init.groovy.d/*.groovy
+chmod 644 /var/jenkins_home/init.groovy.d/*.groovy 2>/dev/null || true
 
 # Start Jenkins
 exec /usr/local/bin/jenkins.sh

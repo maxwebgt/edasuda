@@ -16,7 +16,7 @@ pipeline {
     
     // Build triggers
     triggers {
-        pollSCM('H/5 * * * *')
+        // pollSCM('H/5 * * * *')
     }
     
     stages {
@@ -87,14 +87,6 @@ pipeline {
                         docker-compose down || true
                         docker-compose build
                         docker-compose up -d
-                        
-                    # Next try docker compose plugin
-                    elif command -v docker &> /dev/null && docker compose version &> /dev/null; then
-                        echo "Using docker compose plugin"
-                        docker compose down || true
-                        docker compose build
-                        docker compose up -d
-                        
                     else
                         echo "Error: Docker Compose not available"
                         exit 1
