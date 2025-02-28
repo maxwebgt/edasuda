@@ -1,6 +1,8 @@
 workflow-aggregator
 git
 github
+github-branch-source
+github-api
 docker-workflow
 credentials-binding
 timestamper
@@ -8,3 +10,6 @@ job-dsl
 blueocean:1.27.0
 pipeline-stage-view
 prometheus
+webhook-step
+generic-webhook-trigger
+ws-cleanup
