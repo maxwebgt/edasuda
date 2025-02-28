@@ -77,7 +77,7 @@ pipeline {
         }
         stage('Prepare Docker') {
             steps {
-                sh 'ls -la ./path/to/config'
+                sh 'ls -la ..'
                 sh 'docker-compose -f docker-compose.yml up -d'
             }
         }
