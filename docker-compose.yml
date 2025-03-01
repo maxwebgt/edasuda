@@ -177,8 +177,8 @@ services:
     container_name: promtail
     volumes:
       - ./promtail:/etc/promtail
-      - /var/log:/var/log
-      - ./logs:/var/log:ro
+      - /var/log:/var/log  # Логи, которые Promtail будет читать
+      - ./promtail/logs:/var/log/promtail_logs # Промтейл теперь записывает свои логи сюда
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command: -config.file=/etc/promtail/promtail-config.yml
     networks:
@@ -199,4 +199,6 @@ volumes:
   prometheus_data:
     driver: local
   grafana_data:
+    driver: local
+  promtail_logs: # Новый volume для логов Promtail
     driver: local
