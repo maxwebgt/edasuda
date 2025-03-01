@@ -14,8 +14,9 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - ./mongo_data:/data/db
-      - ./logs:/var/log/mongodb
+      # Используем абсолютные пути с переменной окружения для кроссплатформенности
+      - ${PWD}/mongo_data:/data/db
+      - ${PWD}/logs:/var/log/mongodb
     command: >
       mongod
       --logpath /var/log/mongodb/mongod.log
@@ -54,7 +55,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./backend:/app:cached
+      - ${PWD}/backend:/app:cached
       - /app/node_modules
     depends_on:
       - mongo
@@ -93,7 +94,7 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - ./tg_bot:/app
+      - ${PWD}/tg_bot:/app
       - /app/node_modules
       - pm2_logs:/var/log/pm2
     depends_on:
@@ -116,7 +117,7 @@ services:
     image: prom/prometheus:latest
     container_name: prometheus
     volumes:
-      - ./prometheus:/etc/prometheus
+      - ${PWD}/prometheus:/etc/prometheus
       - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -136,7 +137,7 @@ services:
     container_name: grafana
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ${PWD}/grafana/provisioning:/etc/grafana/provisioning
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -151,7 +152,7 @@ services:
     restart: unless-stopped
     depends_on:
       - prometheus
-    user: "472" # Fix permissions issues
+    user: "root" # Fix permissions issues
 
   loki:
     image: grafana/loki:2.9.2
@@ -160,12 +161,12 @@ services:
     ports:
       - "3100:3100"
     volumes:
-      - ./loki/config:/etc/loki
-      - ./loki/data:/loki
-      - ./loki/wal:/wal
-      - ./loki/chunks:/chunks
-      - ./loki/compactor:/compactor
-      - ./loki/rules:/rules    # Добавляем директорию для правил
+      - ${PWD}/loki/config:/etc/loki
+      - ${PWD}/loki/data:/loki
+      - ${PWD}/loki/wal:/wal
+      - ${PWD}/loki/chunks:/chunks
+      - ${PWD}/loki/compactor:/compactor
+      - ${PWD}/loki/rules:/rules    # Добавляем директорию для правил
     command: "-config.file=/etc/loki/local-config.yaml"
     networks:
       - monitoring
@@ -176,9 +177,9 @@ services:
     image: grafana/promtail:latest
     container_name: promtail
     volumes:
-      - ./promtail:/etc/promtail
+      - ${PWD}/promtail:/etc/promtail
       - /var/log:/var/log  # Логи, которые Promtail будет читать
-      - ./promtail/logs:/var/log/promtail_logs # Промтейл теперь записывает свои логи сюда
+      - ${PWD}/promtail/logs:/var/log/promtail_logs # Промтейл теперь записывает свои логи сюда
       - /var/run/docker.sock:/var/run/docker.sock:ro
     command: -config.file=/etc/promtail/promtail-config.yml
     networks:
